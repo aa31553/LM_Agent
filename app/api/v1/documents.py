@@ -122,12 +122,16 @@ async def reindex_document(
             "Original document file is missing and cannot be reindexed.",
             400,
         )
-    ProcessingQueueService(db).enqueue(document_id, "document")
+    job = ProcessingQueueService(db).enqueue(document_id, "document")
     return ReindexResponse(
         request_id=request_id,
         document_id=document_id,
-        status="queued",
-        message="Reindex task has been queued.",
+        status=job.status,
+        message=(
+            "Reindex task has been queued."
+            if job.status == "queued"
+            else "Reindex task is already running."
+        ),
     )
 
 

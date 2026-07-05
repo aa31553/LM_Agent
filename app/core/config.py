@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://127.0.0.1:1234/v1"
     llm_api_key: str = ""
     llm_model: str = "google/gemma-4-12b-qat"
-    llm_timeout_seconds: int = 90
+    llm_timeout_seconds: int = Field(default=90, ge=1)
     llm_temperature: float = 0.1
     llm_top_p: float = 0.9
     llm_max_tokens: int = 1536
@@ -45,6 +45,16 @@ class Settings(BaseSettings):
     masking_event_retention_days: int = 180
     llm_log_retention_days: int = 180
     audit_event_retention_days: int = 365
+
+    logging_level: str = "INFO"
+    logging_json: bool = False
+
+    db_connect_timeout_seconds: int = Field(default=5, ge=1)
+    health_dependency_timeout_seconds: float = Field(default=2.0, gt=0)
+
+    worker_poll_interval_seconds: float = Field(default=2.0, gt=0)
+    worker_job_timeout_seconds: int = Field(default=300, ge=1)
+    worker_retry_attempts: int = Field(default=2, ge=1)
 
 
 @lru_cache

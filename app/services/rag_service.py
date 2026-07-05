@@ -15,6 +15,7 @@ from app.rag.query_processor import QueryProcessor
 from app.rag.retriever import HybridRetriever
 from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
 from app.security.prompt_injection_detector import PromptInjectionDetector
+from app.services.agent_tool_service import AgentToolService
 from app.services.audit_service import AuditService
 from app.services.image_context_service import ImageContextService
 from app.services.llm_service import LLMService
@@ -32,6 +33,7 @@ class RAGService:
         self.context_builder = ContextBuilder()
         self.prompt_builder = PromptBuilder()
         self.llm_service = LLMService()
+        self.agent_tool_service = AgentToolService(db=db, llm_service=self.llm_service)
         self.citation_builder = CitationBuilder()
         self.audit_service = AuditService(db)
         self.image_context_service = ImageContextService(db)
@@ -156,16 +158,60 @@ class RAGService:
             retrieved_context=context_dlp.text,
             image_context=image_context_dlp.text,
         )
-        answer, latency_ms = await self.audit_service.record_llm_call(
-            message_id=user_message.id,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            operation=lambda: self.llm_service.complete(
-                system_prompt,
-                user_prompt,
-                image_paths=[image.image_path for image in image_models],
-            ),
-        )
+        tool_traces = []
+        if payload.use_tools:
+            try:
+                agent_answer = await self.agent_tool_service.answer_with_tools(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    knowledge_base_ids=payload.knowledge_base_ids,
+                    top_k=payload.top_k,
+                    use_rerank=payload.use_rerank,
+                    principal=principal,
+                )
+            except Exception as exc:
+                self.audit_service.record_completed_llm_call(
+                    message_id=user_message.id,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    answer="",
+                    latency_ms=0,
+                    status="failed",
+                    error_message=str(exc),
+                )
+                self.audit_service.record_event(
+                    "llm_call_failed",
+                    "Agent tool calling failed.",
+                    {"error": str(exc)},
+                    user_id=user.id,
+                    target_type="chat_message",
+                    target_id=user_message.id,
+                    risk_level=RiskLevel.HIGH,
+                )
+                if self.db is not None:
+                    self.db.commit()
+                raise
+            answer = agent_answer.answer
+            latency_ms = agent_answer.latency_ms
+            tool_traces = agent_answer.tool_calls
+            self.audit_service.record_completed_llm_call(
+                message_id=user_message.id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                answer=answer,
+                latency_ms=latency_ms,
+            )
+        else:
+            answer, latency_ms = await self.audit_service.record_llm_call(
+                message_id=user_message.id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                operation=lambda: self.llm_service.complete(
+                    system_prompt,
+                    user_prompt,
+                    image_paths=[image.image_path for image in image_models],
+                ),
+            )
         response_dlp = self.masking_service.scan_and_mask(answer, location="response")
         assistant_message = self.audit_service.record_message(
             session=session,
@@ -186,6 +232,8 @@ class RAGService:
                 "retrieved_chunks": len(chunks),
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
+                "tool_call_count": len(tool_traces),
+                "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
                 "assistant_message_id": str(assistant_message.id),
                 "llm_latency_ms": latency_ms,
             },
@@ -223,6 +271,7 @@ class RAGService:
                 + image_context_dlp.masked_entities
                 + response_dlp.masked_entities
             ),
+            tool_calls=tool_traces,
         )
 
     async def stream_answer(
@@ -355,49 +404,95 @@ class RAGService:
             image_context=image_context_dlp.text,
         )
 
-        started = time.perf_counter()
         answer_parts: list[str] = []
-        try:
-            async for delta in self.llm_service.stream_complete(
-                system_prompt,
-                user_prompt,
-                image_paths=[image.image_path for image in image_models],
-            ):
-                answer_parts.append(delta)
-                yield {"event": "delta", "text": delta}
-        except Exception as exc:
+        tool_traces = []
+        if payload.use_tools:
+            try:
+                agent_answer = await self.agent_tool_service.answer_with_tools(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    knowledge_base_ids=payload.knowledge_base_ids,
+                    top_k=payload.top_k,
+                    use_rerank=payload.use_rerank,
+                    principal=principal,
+                )
+            except Exception as exc:
+                self.audit_service.record_completed_llm_call(
+                    message_id=user_message.id,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    answer="",
+                    latency_ms=0,
+                    status="failed",
+                    error_message=str(exc),
+                )
+                self.audit_service.record_event(
+                    "llm_call_failed",
+                    "Agent tool calling failed.",
+                    {"error": str(exc)},
+                    user_id=user.id,
+                    target_type="chat_message",
+                    target_id=user_message.id,
+                    risk_level=RiskLevel.HIGH,
+                )
+                if self.db is not None:
+                    self.db.commit()
+                raise
+            answer = agent_answer.answer
+            latency_ms = agent_answer.latency_ms
+            tool_traces = agent_answer.tool_calls
+            if answer:
+                yield {"event": "delta", "text": answer}
+            self.audit_service.record_completed_llm_call(
+                message_id=user_message.id,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                answer=answer,
+                latency_ms=latency_ms,
+            )
+        else:
+            started = time.perf_counter()
+            try:
+                async for delta in self.llm_service.stream_complete(
+                    system_prompt,
+                    user_prompt,
+                    image_paths=[image.image_path for image in image_models],
+                ):
+                    answer_parts.append(delta)
+                    yield {"event": "delta", "text": delta}
+            except Exception as exc:
+                latency_ms = int((time.perf_counter() - started) * 1000)
+                self.audit_service.record_completed_llm_call(
+                    message_id=user_message.id,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    answer="".join(answer_parts),
+                    latency_ms=latency_ms,
+                    status="failed",
+                    error_message=str(exc),
+                )
+                self.audit_service.record_event(
+                    "llm_call_failed",
+                    "LLM streaming call failed.",
+                    {"error": str(exc)},
+                    user_id=user.id,
+                    target_type="chat_message",
+                    target_id=user_message.id,
+                    risk_level=RiskLevel.HIGH,
+                )
+                if self.db is not None:
+                    self.db.commit()
+                raise
+
+            answer = "".join(answer_parts)
             latency_ms = int((time.perf_counter() - started) * 1000)
             self.audit_service.record_completed_llm_call(
                 message_id=user_message.id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                answer="".join(answer_parts),
+                answer=answer,
                 latency_ms=latency_ms,
-                status="failed",
-                error_message=str(exc),
             )
-            self.audit_service.record_event(
-                "llm_call_failed",
-                "LLM streaming call failed.",
-                {"error": str(exc)},
-                user_id=user.id,
-                target_type="chat_message",
-                target_id=user_message.id,
-                risk_level=RiskLevel.HIGH,
-            )
-            if self.db is not None:
-                self.db.commit()
-            raise
-
-        answer = "".join(answer_parts)
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        self.audit_service.record_completed_llm_call(
-            message_id=user_message.id,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            answer=answer,
-            latency_ms=latency_ms,
-        )
         response_dlp = self.masking_service.scan_and_mask(answer, location="response")
         assistant_message = self.audit_service.record_message(
             session=session,
@@ -418,6 +513,8 @@ class RAGService:
                 "retrieved_chunks": len(chunks),
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
+                "tool_call_count": len(tool_traces),
+                "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
                 "assistant_message_id": str(assistant_message.id),
                 "llm_latency_ms": latency_ms,
             },
@@ -444,6 +541,7 @@ class RAGService:
                 + image_context_dlp.masked_entities
                 + response_dlp.masked_entities
             ),
+            tool_calls=tool_traces,
         )
         yield {"event": "done", "response": response}
 

@@ -18,4 +18,7 @@ class EmbeddingTasks(QueueWorker):
             await super().process_document_id(document_id)
             return
         with self.db_factory() as db:
-            await DocumentIngestionService(db=db).reindex(document_id, request_id="worker-embedding")
+            await DocumentIngestionService(db=db).process_document(
+                document_id,
+                request_id="worker-embedding",
+            )

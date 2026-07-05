@@ -13,6 +13,13 @@ class ChatQueryRequest(BaseModel):
     top_k: int = Field(default=8, ge=1, le=50)
     use_rerank: bool = True
     use_masking: bool = True
+    use_tools: bool = False
+
+
+class ToolCallTrace(BaseModel):
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)
 
 
 class Citation(BaseModel):
@@ -49,6 +56,7 @@ class ChatQueryResponse(BaseModel):
     confidence: RiskLevel | str = RiskLevel.INSUFFICIENT
     risk_level: RiskLevel = RiskLevel.LOW
     masked_entities: list[MaskedEntity] = Field(default_factory=list)
+    tool_calls: list[ToolCallTrace] = Field(default_factory=list)
 
 
 class ChatMessage(BaseModel):

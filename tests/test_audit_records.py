@@ -17,6 +17,8 @@ from app.models.knowledge_base import KnowledgeBase
 from app.models.masking import MaskingEvent
 from app.models.user import User
 from app.schemas.chat import ChatQueryRequest
+from app.schemas.chat import ToolCallTrace
+from app.services.agent_tool_service import AgentAnswer
 from app.services.rag_service import RAGService
 from app.services.vector_store_service import RetrievedChunk
 
@@ -41,6 +43,21 @@ class FakeLLMService:
         assert "Figure 2 Record workflow" in user_prompt
         assert image_paths == ["data/extracted_images/record-test/page-0001-image-001.png"]
         return "The record unique phrase is available for owner@example.com."
+
+
+class FakeAgentToolService:
+    async def answer_with_tools(self, **kwargs) -> AgentAnswer:
+        return AgentAnswer(
+            answer="The streamed response uses the retention policy.",
+            latency_ms=12,
+            tool_calls=[
+                ToolCallTrace(
+                    tool_name="search_documents",
+                    arguments={"query": "retention policy"},
+                    result={"results": [{"content": "retention policy"}]},
+                )
+            ],
+        )
 
 
 def _auth_headers(token: str) -> dict[str, str]:
@@ -291,4 +308,64 @@ async def test_rag_query_persists_traceable_records_and_audit_api() -> None:
             session_id=session_id,
             external_user_id=external_user_id,
             extra_external_user_ids=[denied_external_user_id],
+        )
+
+
+@pytest.mark.asyncio
+async def test_rag_stream_uses_tool_loop_and_returns_tool_traces() -> None:
+    document_id, kb_id, chunk = _create_record_test_chunk()
+    external_user_id = f"stream-tool-user-{uuid4()}"
+    session_id = None
+    try:
+        with SessionLocal() as db:
+            service = RAGService(db)
+            service.retriever = FakeRetriever(chunk)
+            service.agent_tool_service = FakeAgentToolService()
+
+            events = [
+                event
+                async for event in service.stream_answer(
+                    ChatQueryRequest(
+                        knowledge_base_ids=[kb_id],
+                        query="Use tools to find retention policy",
+                        top_k=3,
+                        use_rerank=False,
+                        use_masking=True,
+                        use_tools=True,
+                    ),
+                    request_id="stream-tool-test",
+                    principal=Principal(
+                        external_user_id=external_user_id,
+                        username=external_user_id,
+                        department="finance",
+                        roles={"employee"},
+                        clearance_level=ConfidentialLevel.INTERNAL,
+                    ),
+                )
+            ]
+
+            done_event = events[-1]
+            response = done_event["response"]
+            session_id = response.session_id
+            assert [event["event"] for event in events] == ["start", "delta", "done"]
+            assert events[1]["text"] == "The streamed response uses the retention policy."
+            assert response.answer == "The streamed response uses the retention policy."
+            assert response.tool_calls[0].tool_name == "search_documents"
+            assert response.tool_calls[0].result["results"][0]["content"] == "retention policy"
+
+            audit_event = (
+                db.query(AuditEvent)
+                .filter(
+                    AuditEvent.event_type == "query_executed",
+                    AuditEvent.target_id == response.message_id,
+                )
+                .one()
+            )
+            assert audit_event.event_metadata["tool_call_count"] == 1
+            assert audit_event.event_metadata["tool_calls"][0]["tool_name"] == "search_documents"
+    finally:
+        _cleanup_record_test_data(
+            document_id=document_id,
+            session_id=session_id,
+            external_user_id=external_user_id,
         )

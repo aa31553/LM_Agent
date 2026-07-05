@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -27,12 +28,17 @@ from app.schemas.document import (
 from app.services.chunking_service import ChunkingService, TextChunk
 from app.services.embedding_service import EmbeddingService
 from app.services.image_ocr_service import ImageOCRService, OCRUnavailableError
+from app.services.office_parser_service import OfficeParserService
 from app.services.pdf_parser_service import PDFParserService, ParsedDocument, ParsedPage
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
+from app.services.processing_queue_service import ProcessingQueueService
 from app.storage.local_storage import LocalStorage
-from app.utils.file_utils import infer_file_type, is_supported_upload
+from app.utils.file_utils import SUPPORTED_UPLOAD_TYPES, infer_file_type, is_supported_upload
 from app.utils.language_detector import detect_language
 from app.utils.text_utils import clean_db_text
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentIngestionService:
@@ -45,6 +51,7 @@ class DocumentIngestionService:
         chunking_service: ChunkingService | None = None,
         embedding_service: EmbeddingService | None = None,
         image_extraction_service: PDFImageExtractionService | None = None,
+        office_parser: OfficeParserService | None = None,
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
@@ -53,6 +60,7 @@ class DocumentIngestionService:
         self.chunking_service = chunking_service or ChunkingService()
         self.embedding_service = embedding_service or EmbeddingService()
         self.image_extraction_service = image_extraction_service or PDFImageExtractionService()
+        self.office_parser = office_parser or OfficeParserService()
 
     async def queue_upload(
         self,
@@ -70,12 +78,12 @@ class DocumentIngestionService:
         if not file.filename or not is_supported_upload(file.filename):
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
-                "Unsupported document type. Supported uploads are PDF and common image files.",
+                "Unsupported document type. Supported uploads are PDF, images, DOCX, XLSX, and PPTX.",
                 400,
             )
 
         content = await file.read()
-        document = await self.ingest_bytes(
+        document = await self.create_uploaded_document(
             content=content,
             original_filename=file.filename,
             knowledge_base_id=knowledge_base_id,
@@ -85,11 +93,16 @@ class DocumentIngestionService:
             version=version,
             principal=principal,
         )
+        job = ProcessingQueueService(self.db).enqueue(document.id, "document")
+        logger.info(
+            "document_upload_queued",
+            extra={"document_id": str(document.id), "job_id": str(job.id), "request_id": request_id},
+        )
         return DocumentUploadResponse(
             request_id=request_id,
             document_id=document.id,
             status=DocumentStatus(document.status),
-            message=self._upload_message(document),
+            message="Document uploaded and queued for background processing.",
         )
 
     async def ingest_file_path(
@@ -101,6 +114,7 @@ class DocumentIngestionService:
         document_type: str | None = None,
         version: str | None = None,
         principal: Principal | None = None,
+        process: bool = True,
     ) -> Document:
         path = Path(file_path)
         return await self.ingest_bytes(
@@ -112,9 +126,36 @@ class DocumentIngestionService:
             document_type=document_type,
             version=version,
             principal=principal,
+            process=process,
         )
 
     async def ingest_bytes(
+        self,
+        content: bytes,
+        original_filename: str,
+        knowledge_base_id: UUID,
+        confidential_level: ConfidentialLevel,
+        department: str | None = None,
+        document_type: str | None = None,
+        version: str | None = None,
+        principal: Principal | None = None,
+        process: bool = True,
+    ) -> Document:
+        document = await self.create_uploaded_document(
+            content=content,
+            original_filename=original_filename,
+            knowledge_base_id=knowledge_base_id,
+            confidential_level=confidential_level,
+            department=department,
+            document_type=document_type,
+            version=version,
+            principal=principal,
+        )
+        if process:
+            await self._process_with_failure_capture(document, raise_on_failure=False)
+        return document
+
+    async def create_uploaded_document(
         self,
         content: bytes,
         original_filename: str,
@@ -130,10 +171,10 @@ class DocumentIngestionService:
 
         self._ensure_knowledge_base_exists(knowledge_base_id)
         file_type = infer_file_type(original_filename)
-        if file_type not in {"pdf", "png", "jpg", "jpeg", "tiff", "bmp"}:
+        if file_type not in SUPPORTED_UPLOAD_TYPES:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
-                "Unsupported document type. Supported uploads are PDF and common image files.",
+                "Unsupported document type. Supported uploads are PDF, images, DOCX, XLSX, and PPTX.",
                 400,
             )
 
@@ -158,15 +199,6 @@ class DocumentIngestionService:
         document_repo.add(document)
         self.db.commit()
         self.db.refresh(document)
-
-        try:
-            await self._process_document(document)
-        except APIError as exc:
-            document.status = DocumentStatus.FAILED.value
-            document.error_message = exc.message
-            document.updated_at = datetime.utcnow()
-            self.db.commit()
-            self.db.refresh(document)
         return document
 
     def status(self, document_id: UUID) -> DocumentStatusResponse:
@@ -205,6 +237,14 @@ class DocumentIngestionService:
         )
 
     async def reindex(self, document_id: UUID, request_id: str) -> ReindexResponse:
+        return await self.process_document(document_id, request_id=request_id, reset=True)
+
+    async def process_document(
+        self,
+        document_id: UUID,
+        request_id: str,
+        reset: bool = True,
+    ) -> ReindexResponse:
         document = self._get_document(document_id)
         if document.status == DocumentStatus.ARCHIVED.value:
             raise APIError(ErrorCode.INVALID_REQUEST, "Archived documents cannot be reindexed.", 400)
@@ -215,16 +255,10 @@ class DocumentIngestionService:
                 400,
             )
 
-        DocumentImageRepository(self.db).delete_by_document_id(document.id)
-        ChunkRepository(self.db).delete_by_document_id(document.id)
-        document.chunk_count = 0
-        document.error_message = None
-        document.ocr_required = False
-        document.ocr_confidence = None
-        document.updated_at = datetime.utcnow()
-        self.db.commit()
+        if reset:
+            self._reset_document_for_processing(document)
 
-        await self._process_document(document)
+        await self._process_with_failure_capture(document, raise_on_failure=True)
         status = DocumentStatus(document.status)
         return ReindexResponse(
             request_id=request_id,
@@ -263,7 +297,46 @@ class DocumentIngestionService:
         if document.file_type == "pdf":
             await self._process_pdf_document(document)
             return
+        if document.file_type in OfficeParserService.supported_types:
+            await self._process_office_document(document)
+            return
         await self._process_image_document(document)
+
+    async def _process_with_failure_capture(
+        self,
+        document: Document,
+        *,
+        raise_on_failure: bool,
+    ) -> None:
+        try:
+            await self._process_document(document)
+        except Exception as exc:
+            document.status = DocumentStatus.FAILED.value
+            document.error_message = exc.message if isinstance(exc, APIError) else str(exc)
+            document.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(document)
+            logger.exception("document_processing_failed", extra={"document_id": str(document.id)})
+            if raise_on_failure:
+                raise
+            return
+
+        if document.status == DocumentStatus.FAILED.value and raise_on_failure:
+            raise APIError(
+                ErrorCode.INTERNAL_ERROR,
+                document.error_message or "Document processing failed.",
+                500,
+            )
+
+    def _reset_document_for_processing(self, document: Document) -> None:
+        DocumentImageRepository(self.db).delete_by_document_id(document.id)
+        ChunkRepository(self.db).delete_by_document_id(document.id)
+        document.chunk_count = 0
+        document.error_message = None
+        document.ocr_required = False
+        document.ocr_confidence = None
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
 
     async def _process_pdf_document(self, document: Document) -> None:
         document.status = DocumentStatus.PARSING.value
@@ -330,6 +403,53 @@ class DocumentIngestionService:
         ChunkRepository(self.db).add_many(chunk_models)
         self.db.flush()
         self._link_images_to_chunks(image_models, chunks, chunk_models)
+        document.chunk_count = len(chunk_models)
+        document.status = DocumentStatus.READY.value
+        document.error_message = None
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(document)
+
+    async def _process_office_document(self, document: Document) -> None:
+        document.status = DocumentStatus.PARSING.value
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
+
+        parsed = await self.office_parser.parse(document.file_path, file_type=document.file_type)
+        document.page_count = parsed.page_count
+        document.ocr_required = False
+        document.ocr_confidence = None
+
+        if not parsed.text.strip():
+            document.status = DocumentStatus.FAILED.value
+            document.error_message = "Office document did not contain extractable text."
+            document.updated_at = datetime.utcnow()
+            self.db.commit()
+            return
+
+        document.status = DocumentStatus.CHUNKING.value
+        document.language = detect_language(parsed.text)
+        self.db.commit()
+
+        chunks = self.chunking_service.chunk_pages(
+            parsed.pages,
+            source_type=f"{document.file_type}_text",
+        )
+        if not chunks:
+            raise APIError(ErrorCode.INVALID_REQUEST, "Office document did not produce any chunks.", 400)
+
+        document.status = DocumentStatus.EMBEDDING.value
+        self.db.commit()
+        embeddings = await self._embed_chunks(chunks)
+
+        document.status = DocumentStatus.INDEXING.value
+        self.db.commit()
+        chunk_models = [
+            self._chunk_model(document, text_chunk, embedding)
+            for text_chunk, embedding in zip(chunks, embeddings, strict=True)
+        ]
+        ChunkRepository(self.db).add_many(chunk_models)
+        self.db.flush()
         document.chunk_count = len(chunk_models)
         document.status = DocumentStatus.READY.value
         document.error_message = None

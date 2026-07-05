@@ -1,6 +1,7 @@
 import base64
 import json
 import mimetypes
+from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import AsyncIterator
 from typing import Any
@@ -10,6 +11,19 @@ import httpx
 from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
+
+
+@dataclass(frozen=True)
+class ChatToolCall:
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class ChatCompletionResult:
+    content: str
+    tool_calls: list[ChatToolCall]
 
 
 class OpenAICompatibleClient:
@@ -22,55 +36,26 @@ class OpenAICompatibleClient:
         user_prompt: str,
         image_paths: list[str] | None = None,
     ) -> str:
-        payload = {
-            "model": settings.llm_model,
-            "messages": [
+        body = await self._post_chat_completion(
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._user_content(user_prompt, image_paths or [])},
             ],
-            "temperature": settings.llm_temperature,
-            "top_p": settings.llm_top_p,
-            "max_tokens": settings.llm_max_tokens,
-        }
-        if settings.llm_reasoning_effort:
-            payload["reasoning_effort"] = settings.llm_reasoning_effort
-        headers = self._headers()
-        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
-
-        try:
-            if self.http_client is not None:
-                response = await self.http_client.post(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    timeout=settings.llm_timeout_seconds,
-                )
-            else:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        url,
-                        json=payload,
-                        headers=headers,
-                        timeout=settings.llm_timeout_seconds,
-                    )
-            response.raise_for_status()
-            body = response.json()
-        except httpx.HTTPStatusError as exc:
-            raise APIError(
-                ErrorCode.LLM_SERVICE_ERROR,
-                "LLM service returned an error.",
-                status_code=502,
-                details={"status_code": exc.response.status_code, "body": exc.response.text},
-            ) from exc
-        except (httpx.HTTPError, ValueError) as exc:
-            raise APIError(
-                ErrorCode.LLM_SERVICE_ERROR,
-                "LLM service request failed.",
-                status_code=502,
-                details={"error": str(exc)},
-            ) from exc
-
+        )
         return self._parse_content(body)
+
+    async def chat_completion_messages(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> ChatCompletionResult:
+        body = await self._post_chat_completion(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        return self._parse_chat_result(body)
 
     async def stream_chat_completion(
         self,
@@ -140,7 +125,75 @@ class OpenAICompatibleClient:
             headers["Authorization"] = f"Bearer {settings.llm_api_key}"
         return headers
 
+    async def _post_chat_completion(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "top_p": settings.llm_top_p,
+            "max_tokens": settings.llm_max_tokens,
+        }
+        if settings.llm_reasoning_effort:
+            payload["reasoning_effort"] = settings.llm_reasoning_effort
+        if tools:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+
+        headers = self._headers()
+        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+
+        try:
+            if self.http_client is not None:
+                response = await self.http_client.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=settings.llm_timeout_seconds,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        url,
+                        json=payload,
+                        headers=headers,
+                        timeout=settings.llm_timeout_seconds,
+                    )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            raise APIError(
+                ErrorCode.LLM_SERVICE_ERROR,
+                "LLM service returned an error.",
+                status_code=502,
+                details={"status_code": exc.response.status_code, "body": exc.response.text},
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise APIError(
+                ErrorCode.LLM_SERVICE_ERROR,
+                "LLM service request failed.",
+                status_code=502,
+                details={"error": str(exc)},
+            ) from exc
+
     def _parse_content(self, body: dict[str, Any]) -> str:
+        result = self._parse_chat_result(body)
+        if result.content:
+            return result.content
+        raise APIError(
+            ErrorCode.LLM_SERVICE_ERROR,
+            "LLM service response message does not contain text content.",
+            status_code=502,
+            details={"body": body},
+        )
+
+    def _parse_chat_result(self, body: dict[str, Any]) -> ChatCompletionResult:
         choices = body.get("choices")
         if not isinstance(choices, list) or not choices:
             raise APIError(
@@ -160,14 +213,36 @@ class OpenAICompatibleClient:
             )
 
         content = message.get("content")
-        if not isinstance(content, str):
-            raise APIError(
-                ErrorCode.LLM_SERVICE_ERROR,
-                "LLM service response message does not contain text content.",
-                status_code=502,
-                details={"body": body},
+        tool_calls = self._parse_tool_calls(message.get("tool_calls"))
+        return ChatCompletionResult(
+            content=content if isinstance(content, str) else "",
+            tool_calls=tool_calls,
+        )
+
+    def _parse_tool_calls(self, raw_tool_calls: Any) -> list[ChatToolCall]:
+        if not isinstance(raw_tool_calls, list):
+            return []
+        tool_calls: list[ChatToolCall] = []
+        for index, item in enumerate(raw_tool_calls):
+            if not isinstance(item, dict):
+                continue
+            function = item.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            arguments = function.get("arguments")
+            if not isinstance(name, str):
+                continue
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments or {}, ensure_ascii=False)
+            tool_calls.append(
+                ChatToolCall(
+                    id=str(item.get("id") or f"tool_call_{index}"),
+                    name=name,
+                    arguments=arguments,
+                )
             )
-        return content
+        return tool_calls
 
     def _user_content(self, user_prompt: str, image_paths: list[str]) -> str | list[dict]:
         if not settings.llm_send_images_to_model or not image_paths:

@@ -1,3 +1,5 @@
+import asyncio
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -5,10 +7,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from app.core.constants import ConfidentialLevel, DocumentStatus
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.main import create_app
 from app.models.document import Document, DocumentProcessingJob
 from app.models.knowledge_base import KnowledgeBase
+from app.services.processing_queue_service import ProcessingQueueService
 from app.workers.document_tasks import DocumentTasks
 from app.workers.embedding_tasks import EmbeddingTasks
 from app.workers.ocr_tasks import OCRTasks
@@ -42,11 +46,17 @@ def _create_queue_test_document(file_path: str = "data/uploads/queue-test.pdf") 
 
 
 def _cleanup_queue_test_document(document_id: UUID, kb_id: UUID) -> None:
+    file_path: str | None = None
     with SessionLocal() as db:
+        document = db.get(Document, document_id)
+        if document is not None:
+            file_path = document.file_path
         db.execute(delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document_id))
         db.execute(delete(Document).where(Document.id == document_id))
         db.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
         db.commit()
+    if file_path is not None:
+        Path(file_path).unlink(missing_ok=True)
 
 
 def _admin_headers() -> dict[str, str]:
@@ -111,6 +121,135 @@ async def test_queue_worker_marks_failed_job() -> None:
         assert failed.finished_at is not None
     finally:
         _cleanup_queue_test_document(document_id, kb_id)
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_retries_transient_failures(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "worker_retry_attempts", 2)
+    document_id, kb_id = _create_queue_test_document()
+    attempts: list[UUID] = []
+
+    async def processor(processed_document_id: UUID) -> None:
+        attempts.append(processed_document_id)
+        if len(attempts) == 1:
+            raise RuntimeError("temporary failure")
+
+    try:
+        worker = DocumentTasks(processor=processor)
+        job = worker.enqueue_document(document_id)
+
+        completed = await worker.process_next()
+        assert completed is not None
+        assert completed.id == job.id
+        assert completed.status == "completed"
+        assert attempts == [document_id, document_id]
+    finally:
+        _cleanup_queue_test_document(document_id, kb_id)
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_marks_timeout_failure(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "worker_retry_attempts", 1)
+    monkeypatch.setattr(settings, "worker_job_timeout_seconds", 0.01)
+    document_id, kb_id = _create_queue_test_document()
+
+    async def processor(_processed_document_id: UUID) -> None:
+        await asyncio.sleep(1)
+
+    try:
+        worker = DocumentTasks(processor=processor)
+        job = worker.enqueue_document(document_id)
+
+        failed = await worker.process_next()
+        assert failed is not None
+        assert failed.id == job.id
+        assert failed.status == "failed"
+        assert "timed out" in (failed.error_message or "")
+    finally:
+        _cleanup_queue_test_document(document_id, kb_id)
+
+
+def test_processing_queue_deduplicates_active_document_jobs() -> None:
+    document_id, kb_id = _create_queue_test_document()
+    try:
+        with SessionLocal() as db:
+            service = ProcessingQueueService(db)
+            first = service.enqueue(document_id, "document")
+            second = service.enqueue(document_id, "document")
+
+            assert second.id == first.id
+            assert (
+                db.query(DocumentProcessingJob)
+                .filter(
+                    DocumentProcessingJob.document_id == document_id,
+                    DocumentProcessingJob.job_type == "document",
+                    DocumentProcessingJob.status == "queued",
+                )
+                .count()
+                == 1
+            )
+    finally:
+        _cleanup_queue_test_document(document_id, kb_id)
+
+
+def test_upload_api_queues_document_job_without_inline_processing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "local_storage_root", str(tmp_path / "uploads"))
+    with SessionLocal() as db:
+        kb = KnowledgeBase(
+            name=f"upload-queue-test-{uuid4()}",
+            description="upload queue test",
+            owner_department="qa",
+            default_confidential_level=ConfidentialLevel.INTERNAL.value,
+        )
+        db.add(kb)
+        db.commit()
+        kb_id = kb.id
+
+    document_id: UUID | None = None
+    try:
+        response = TestClient(create_app()).post(
+            "/api/v1/documents/upload",
+            headers=_admin_headers(),
+            data={
+                "knowledge_base_id": str(kb_id),
+                "confidential_level": ConfidentialLevel.INTERNAL.value,
+            },
+            files={
+                "file": (
+                    "queued-upload.pdf",
+                    b"%PDF-1.4\n% queued upload test\n",
+                    "application/pdf",
+                )
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        document_id = UUID(body["document_id"])
+        assert body["status"] == "uploaded"
+        assert body["message"] == "Document uploaded and queued for background processing."
+
+        with SessionLocal() as db:
+            document = db.get(Document, document_id)
+            assert document is not None
+            assert document.status == DocumentStatus.UPLOADED.value
+            assert document.chunk_count == 0
+            job = (
+                db.query(DocumentProcessingJob)
+                .filter(
+                    DocumentProcessingJob.document_id == document_id,
+                    DocumentProcessingJob.job_type == "document",
+                    DocumentProcessingJob.status == "queued",
+                )
+                .one()
+            )
+            assert job.progress == 0
+    finally:
+        if document_id is not None:
+            _cleanup_queue_test_document(document_id, kb_id)
+        else:
+            with SessionLocal() as db:
+                db.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+                db.commit()
 
 
 def test_reindex_api_queues_document_job(tmp_path) -> None:

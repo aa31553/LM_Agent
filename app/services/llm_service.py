@@ -1,5 +1,7 @@
 from collections.abc import AsyncIterator
+from typing import Any
 
+from app.integrations.openai_compatible_client import ChatCompletionResult
 from app.integrations.openai_compatible_client import OpenAICompatibleClient
 
 
@@ -17,6 +19,18 @@ class LLMService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             image_paths=image_paths,
+        )
+
+    async def complete_messages(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> ChatCompletionResult:
+        return await self.client.chat_completion_messages(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
     def stream_complete(

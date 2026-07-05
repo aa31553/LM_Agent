@@ -34,6 +34,7 @@ class ChunkingService:
         pages: list[ParsedPage],
         chunk_size: int = 700,
         overlap: int = 120,
+        source_type: str = "pdf_text",
     ) -> list[TextChunk]:
         chunks: list[TextChunk] = []
         buffer: list[str] = []
@@ -45,13 +46,13 @@ class ChunkingService:
                 buffer.append(word)
                 buffer_pages.append(page.page_number)
                 if len(buffer) >= chunk_size:
-                    chunks.append(self._build_page_chunk(len(chunks), buffer, buffer_pages))
+                    chunks.append(self._build_page_chunk(len(chunks), buffer, buffer_pages, source_type))
                     keep = min(overlap, len(buffer))
                     buffer = buffer[-keep:] if keep else []
                     buffer_pages = buffer_pages[-keep:] if keep else []
 
         if buffer:
-            chunks.append(self._build_page_chunk(len(chunks), buffer, buffer_pages))
+            chunks.append(self._build_page_chunk(len(chunks), buffer, buffer_pages, source_type))
         return chunks
 
     def chunk_images(
@@ -120,6 +121,7 @@ class ChunkingService:
         chunk_index: int,
         words: list[str],
         page_numbers: list[int],
+        source_type: str,
     ) -> TextChunk:
         content = " ".join(words)
         return TextChunk(
@@ -129,6 +131,6 @@ class ChunkingService:
             metadata={
                 "page_start": min(page_numbers) if page_numbers else None,
                 "page_end": max(page_numbers) if page_numbers else None,
-                "source_type": "pdf_text",
+                "source_type": source_type,
             },
         )
