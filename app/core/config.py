@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
+    cors_allow_origins: list[str] = [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
 
     database_url: str = Field(
         default="postgresql+psycopg://lm_agent:lm_agent@localhost:5432/lm_agent"
