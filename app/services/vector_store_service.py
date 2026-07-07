@@ -42,7 +42,12 @@ class VectorStoreService:
                     c.document_id,
                     c.content,
                     c.confidential_level,
+                    c.source_type,
+                    c.page_start,
+                    c.page_end,
+                    c.section_title,
                     c.metadata,
+                    COALESCE(d.title, d.original_filename, d.filename) AS document_title,
                     1 - (c.embedding <=> CAST(:query_embedding AS vector)) AS vector_score
                 FROM document_chunks c
                 JOIN documents d ON d.id = c.document_id
@@ -73,6 +78,11 @@ class VectorStoreService:
                 metadata={
                     **(row["metadata"] or {}),
                     "confidential_level": row["confidential_level"],
+                    "source_type": row["source_type"],
+                    "page_start": row["page_start"],
+                    "page_end": row["page_end"],
+                    "section_title": row["section_title"],
+                    "title": row["document_title"],
                 },
             )
             for row in rows
@@ -95,20 +105,40 @@ class VectorStoreService:
               AND d.confidential_level = ANY(:allowed_confidential_levels)
               AND (
                     d.department = :principal_department
-                    OR NOT EXISTS (
-                        SELECT 1 FROM document_permissions dp
-                        WHERE dp.document_id = d.id
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM document_permissions dp
-                        WHERE dp.document_id = d.id
-                          AND dp.permission IN ('read', 'admin')
-                          AND (
-                              (dp.subject_type = 'user' AND dp.subject_value = :principal_user)
-                              OR (dp.subject_type = 'department' AND dp.subject_value = :principal_department)
-                              OR (dp.subject_type = 'role' AND dp.subject_value = ANY(:principal_roles))
+                    OR (
+                        (
+                            NOT EXISTS (
+                                SELECT 1 FROM knowledge_base_permissions kbp
+                                WHERE kbp.knowledge_base_id = d.knowledge_base_id
+                            )
+                            OR EXISTS (
+                                SELECT 1 FROM knowledge_base_permissions kbp
+                                WHERE kbp.knowledge_base_id = d.knowledge_base_id
+                                  AND kbp.permission IN ('read', 'admin')
+                                  AND (
+                                      (kbp.subject_type = 'user' AND kbp.subject_value = :principal_user)
+                                      OR (kbp.subject_type = 'department' AND kbp.subject_value = :principal_department)
+                                      OR (kbp.subject_type = 'role' AND kbp.subject_value = ANY(:principal_roles))
+                                  )
+                            )
+                        )
+                        AND (
+                            NOT EXISTS (
+                                SELECT 1 FROM document_permissions dp
+                                WHERE dp.document_id = d.id
+                            )
+                            OR EXISTS (
+                                SELECT 1 FROM document_permissions dp
+                                WHERE dp.document_id = d.id
+                                  AND dp.permission IN ('read', 'admin')
+                                  AND (
+                                      (dp.subject_type = 'user' AND dp.subject_value = :principal_user)
+                                      OR (dp.subject_type = 'department' AND dp.subject_value = :principal_department)
+                                      OR (dp.subject_type = 'role' AND dp.subject_value = ANY(:principal_roles))
+                                  )
+                            )
+                        )
                           )
-                    )
               )
             """,
             {

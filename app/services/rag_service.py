@@ -19,6 +19,7 @@ from app.services.agent_tool_service import AgentToolService
 from app.services.audit_service import AuditService
 from app.services.image_context_service import ImageContextService
 from app.services.llm_service import LLMService
+from app.services.llmwiki_service import LLMWikiService
 from app.services.masking_service import MaskingService
 from app.services.vector_store_service import RetrievedChunk
 
@@ -37,6 +38,7 @@ class RAGService:
         self.citation_builder = CitationBuilder()
         self.audit_service = AuditService(db)
         self.image_context_service = ImageContextService(db)
+        self.llmwiki_service = LLMWikiService(db)
 
     async def answer(
         self,
@@ -79,17 +81,24 @@ class RAGService:
                 self.db.commit()
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains restricted information.", 400)
 
+        requested_top_k = payload.top_k
         chunks = await self.retriever.retrieve(
             query=processed_query,
             knowledge_base_ids=payload.knowledge_base_ids,
-            top_k=payload.top_k,
+            top_k=self._retrieval_candidate_top_k(requested_top_k),
             use_rerank=payload.use_rerank,
             principal=principal,
         )
         wants_images = self._query_wants_images(processed_query)
-        chunks = self._filter_image_chunks_for_query(chunks, wants_images)
+        chunks = self._filter_image_chunks_for_query(chunks, wants_images)[:requested_top_k]
+        llmwiki_context = self.llmwiki_service.build_reference_context(
+            query=processed_query,
+            knowledge_base_ids=payload.knowledge_base_ids,
+            principal=principal,
+            max_chars=self._llmwiki_context_char_budget(),
+        )
 
-        if not chunks:
+        if not chunks and not llmwiki_context:
             answer = "The available documents do not contain enough information to answer this question."
             self.audit_service.record_message(
                 session=session,
@@ -126,11 +135,14 @@ class RAGService:
                 masked_entities=query_dlp.masked_entities,
             )
 
-        context, used_chunks = self.context_builder.build_with_used_chunks(
-            chunks,
-            max_tokens=self._retrieval_context_token_budget(),
-            max_chars=self._retrieval_context_char_budget(),
-        )
+        if chunks:
+            context, used_chunks = self.context_builder.build_with_used_chunks(
+                chunks,
+                max_tokens=self._retrieval_context_token_budget(),
+                max_chars=self._retrieval_context_char_budget(),
+            )
+        else:
+            context, used_chunks = "", []
         if self._block_restricted_context(used_chunks, request_id, user.id, user_message.id):
             raise APIError(ErrorCode.DLP_BLOCKED, "Restricted content cannot be sent to the LLM.", 400)
         used_chunk_ids = {chunk.chunk_id for chunk in used_chunks}
@@ -151,12 +163,15 @@ class RAGService:
         )
         context_dlp = self.masking_service.scan_and_mask(context, location="context")
         image_context_dlp = self.masking_service.scan_and_mask(image_context, location="context")
+        llmwiki_context_dlp = self.masking_service.scan_and_mask(llmwiki_context, location="context")
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
+        self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
         system_prompt, user_prompt = self.prompt_builder.build(
             masked_query=processed_query,
             retrieved_context=context_dlp.text,
             image_context=image_context_dlp.text,
+            llmwiki_context=llmwiki_context_dlp.text,
         )
         tool_traces = []
         if payload.use_tools:
@@ -232,6 +247,7 @@ class RAGService:
                 "retrieved_chunks": len(chunks),
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
+                "llmwiki_context_used": bool(llmwiki_context_dlp.text),
                 "tool_call_count": len(tool_traces),
                 "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
                 "assistant_message_id": str(assistant_message.id),
@@ -269,6 +285,7 @@ class RAGService:
                 query_dlp.masked_entities
                 + context_dlp.masked_entities
                 + image_context_dlp.masked_entities
+                + llmwiki_context_dlp.masked_entities
                 + response_dlp.masked_entities
             ),
             tool_calls=tool_traces,
@@ -322,16 +339,23 @@ class RAGService:
                 self.db.commit()
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains restricted information.", 400)
 
+        requested_top_k = payload.top_k
         chunks = await self.retriever.retrieve(
             query=processed_query,
             knowledge_base_ids=payload.knowledge_base_ids,
-            top_k=payload.top_k,
+            top_k=self._retrieval_candidate_top_k(requested_top_k),
             use_rerank=payload.use_rerank,
             principal=principal,
         )
         wants_images = self._query_wants_images(processed_query)
-        chunks = self._filter_image_chunks_for_query(chunks, wants_images)
-        if not chunks:
+        chunks = self._filter_image_chunks_for_query(chunks, wants_images)[:requested_top_k]
+        llmwiki_context = self.llmwiki_service.build_reference_context(
+            query=processed_query,
+            knowledge_base_ids=payload.knowledge_base_ids,
+            principal=principal,
+            max_chars=self._llmwiki_context_char_budget(),
+        )
+        if not chunks and not llmwiki_context:
             answer = "The available documents do not contain enough information to answer this question."
             self.audit_service.record_message(
                 session=session,
@@ -371,11 +395,14 @@ class RAGService:
             yield {"event": "done", "response": response}
             return
 
-        context, used_chunks = self.context_builder.build_with_used_chunks(
-            chunks,
-            max_tokens=self._retrieval_context_token_budget(),
-            max_chars=self._retrieval_context_char_budget(),
-        )
+        if chunks:
+            context, used_chunks = self.context_builder.build_with_used_chunks(
+                chunks,
+                max_tokens=self._retrieval_context_token_budget(),
+                max_chars=self._retrieval_context_char_budget(),
+            )
+        else:
+            context, used_chunks = "", []
         if self._block_restricted_context(used_chunks, request_id, user.id, user_message.id):
             raise APIError(ErrorCode.DLP_BLOCKED, "Restricted content cannot be sent to the LLM.", 400)
         used_chunk_ids = {chunk.chunk_id for chunk in used_chunks}
@@ -396,12 +423,15 @@ class RAGService:
         )
         context_dlp = self.masking_service.scan_and_mask(context, location="context")
         image_context_dlp = self.masking_service.scan_and_mask(image_context, location="context")
+        llmwiki_context_dlp = self.masking_service.scan_and_mask(llmwiki_context, location="context")
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
+        self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
         system_prompt, user_prompt = self.prompt_builder.build(
             masked_query=processed_query,
             retrieved_context=context_dlp.text,
             image_context=image_context_dlp.text,
+            llmwiki_context=llmwiki_context_dlp.text,
         )
 
         answer_parts: list[str] = []
@@ -513,6 +543,7 @@ class RAGService:
                 "retrieved_chunks": len(chunks),
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
+                "llmwiki_context_used": bool(llmwiki_context_dlp.text),
                 "tool_call_count": len(tool_traces),
                 "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
                 "assistant_message_id": str(assistant_message.id),
@@ -539,6 +570,7 @@ class RAGService:
                 query_dlp.masked_entities
                 + context_dlp.masked_entities
                 + image_context_dlp.masked_entities
+                + llmwiki_context_dlp.masked_entities
                 + response_dlp.masked_entities
             ),
             tool_calls=tool_traces,
@@ -555,10 +587,34 @@ class RAGService:
     def _image_context_char_budget(self) -> int:
         return min(6000, max(2000, settings.context_max_chars // 5))
 
+    def _llmwiki_context_char_budget(self) -> int:
+        return min(7000, max(2500, settings.context_max_chars // 4))
+
+    def _retrieval_candidate_top_k(self, requested_top_k: int) -> int:
+        return max(requested_top_k, min(requested_top_k * 3, requested_top_k + 20))
+
     def _query_wants_images(self, query: str) -> bool:
         lowered = query.lower()
-        image_terms = ("image", "figure", "fig.", "fig ", "chart", "diagram", "graph", "table", "圖", "表")
-        image_terms = (*image_terms, "\u5716", "\u8868")
+        image_terms = (
+            "image",
+            "figure",
+            "fig.",
+            "fig ",
+            "chart",
+            "diagram",
+            "graph",
+            "table",
+            "圖片",
+            "圖",
+            "圖表",
+            "表格",
+            "mechanical abuse",
+            "thermal abuse",
+            "thermal runaway",
+            "熱失控",
+            "機械濫用",
+            "熱濫用",
+        )
         return any(term in lowered for term in image_terms)
 
     def _filter_image_chunks_for_query(

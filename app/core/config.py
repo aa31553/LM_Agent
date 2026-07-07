@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     embedding_endpoint: str = "http://127.0.0.1:1234/v1/embeddings"
     embedding_model: str = "text-embedding-mxbai-embed-large-v1"
     embedding_dimension: int = 1024
+    embedding_batch_size: int = Field(default=16, ge=1)
 
     llm_base_url: str = "http://127.0.0.1:1234/v1"
     llm_api_key: str = ""

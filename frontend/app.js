@@ -5,6 +5,7 @@ const tabs = {
   documents: "文件",
   chat: "問答",
   admin: "管理稽核",
+  llmwiki: "LLMWiki",
   raw: "API",
 };
 
@@ -16,6 +17,7 @@ const state = {
   sessionId: localStorage.getItem("lmAgentSessionId") || "",
   knowledgeBases: [],
   documents: [],
+  llmwikiPage: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -48,6 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
 function renderAll() {
   renderOverview();
   renderKnowledge();
+  renderLLMWiki();
   renderDocuments();
   renderChat();
   renderAdmin();
@@ -375,10 +378,377 @@ async function deleteKbPermission() {
 }
 
 function syncKbSelectors() {
-  ["#uploadKbId", "#chatKbId"].forEach((selector) => {
+  ["#uploadKbId", "#chatKbId", "#llmwikiKbId"].forEach((selector) => {
     const node = $(selector);
     if (node) node.innerHTML = optionHtml(state.knowledgeBases, state.selectedKbId);
   });
+}
+
+function renderLLMWiki() {
+  $("#llmwiki").innerHTML = `
+    <div class="grid">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>LLMWiki Knowledge Compiler</h2>
+          <div class="actions">
+            <button id="llmwikiSearchBtn">Search</button>
+            <button id="llmwikiBuildBtn">Preview</button>
+            <button class="primary" id="llmwikiCompileBtn">Compile</button>
+            <button id="llmwikiIndexBtn">Index</button>
+            <button id="llmwikiLintBtn">Lint</button>
+            <button id="llmwikiGraphBtn">Graph</button>
+            <button id="llmwikiDemoBtn">Demo</button>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label class="wide">Knowledge Base<select id="llmwikiKbId"></select></label>
+          <label class="wide">Topic<input id="llmwikiTopic" value="LLMWiki" /></label>
+          <label>Top K<input id="llmwikiTopK" type="number" min="1" max="80" value="24" /></label>
+        </div>
+      </div>
+      <div class="metric-row">
+        <div class="metric"><span>Status</span><b id="llmwikiCompiledStatus">Preview</b></div>
+        <div class="metric"><span>Sources</span><b id="llmwikiSourceCount">-</b></div>
+        <div class="metric"><span>Evidence</span><b id="llmwikiChunkCount">-</b></div>
+        <div class="metric"><span>Links</span><b id="llmwikiLinkCount">-</b></div>
+      </div>
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-header"><h2>Compiled Knowledge</h2></div>
+          <div id="llmwikiSummary" class="wiki-summary muted">No topic loaded.</div>
+          <div id="llmwikiLinks" class="wiki-links"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Knowledge Graph</h2></div>
+          <div id="llmwikiGraph" class="wiki-graph"></div>
+        </div>
+      </div>
+      <div class="panel full-width">
+        <div class="panel-header"><h2>Evidence</h2></div>
+        <div id="llmwikiEvidence"></div>
+      </div>
+      <div class="panel full-width">
+        <div class="panel-header"><h2>Compiled Markdown</h2></div>
+        <div id="llmwikiMarkdown" class="output"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h2>API Output</h2></div>
+        <div id="llmwikiOutput" class="output"></div>
+      </div>
+    </div>
+  `;
+  $("#llmwikiSearchBtn").addEventListener("click", searchLLMWikiTopics);
+  $("#llmwikiBuildBtn").addEventListener("click", buildLLMWikiPage);
+  $("#llmwikiCompileBtn").addEventListener("click", compileLLMWikiPage);
+  $("#llmwikiIndexBtn").addEventListener("click", loadLLMWikiIndex);
+  $("#llmwikiLintBtn").addEventListener("click", lintLLMWiki);
+  $("#llmwikiGraphBtn").addEventListener("click", loadLLMWikiGraph);
+  $("#llmwikiDemoBtn").addEventListener("click", loadLLMWikiDemo);
+  syncKbSelectors();
+}
+
+function llmwikiParams(includeTopK = true) {
+  const kbId = $("#llmwikiKbId").value || state.selectedKbId;
+  if (!kbId) throw new Error("Select a knowledge base first.");
+  const params = new URLSearchParams();
+  params.append("knowledge_base_ids", kbId);
+  if (includeTopK) params.set("top_k", $("#llmwikiTopK").value || "12");
+  return params;
+}
+
+function llmwikiTopic() {
+  const topic = $("#llmwikiTopic").value.trim();
+  if (!topic) throw new Error("Enter a topic.");
+  return topic;
+}
+
+async function searchLLMWikiTopics() {
+  try {
+    const topic = llmwikiTopic();
+    const params = llmwikiParams(false);
+    params.set("q", topic);
+    params.set("limit", "10");
+    const payload = await api(`/llmwiki/search?${params}`);
+    renderLLMWikiSearch(payload.items || []);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+async function buildLLMWikiPage() {
+  try {
+    const topic = llmwikiTopic();
+    const params = llmwikiParams(true);
+    params.set("include_graph", "true");
+    params.set("prefer_compiled", "true");
+    const payload = await api(`/llmwiki/topics/${encodeURIComponent(topic)}?${params}`);
+    state.llmwikiPage = payload;
+    renderLLMWikiPage(payload);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+async function compileLLMWikiPage() {
+  try {
+    const topic = llmwikiTopic();
+    const params = llmwikiParams(true);
+    params.set("include_graph", "true");
+    const payload = await api(`/llmwiki/topics/${encodeURIComponent(topic)}/compile?${params}`, {
+      method: "POST",
+    });
+    state.llmwikiPage = payload.page;
+    renderLLMWikiPage(payload.page);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+async function loadLLMWikiIndex() {
+  try {
+    const params = llmwikiParams(false);
+    const payload = await api(`/llmwiki/index?${params}`);
+    renderLLMWikiIndex(payload.items || []);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+async function lintLLMWiki() {
+  try {
+    const params = llmwikiParams(false);
+    const payload = await api(`/llmwiki/lint?${params}`);
+    renderLLMWikiLint(payload);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+async function loadLLMWikiDemo() {
+  try {
+    const payload = await api("/llmwiki/demo");
+    $("#llmwikiTopic").value = payload.topic;
+    state.llmwikiPage = payload;
+    renderLLMWikiPage(payload);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+async function loadLLMWikiGraph() {
+  try {
+    const topic = llmwikiTopic();
+    const params = llmwikiParams(true);
+    const payload = await api(`/llmwiki/topics/${encodeURIComponent(topic)}/graph?${params}`);
+    drawLLMWikiGraph(payload);
+    writeOutput("#llmwikiOutput", payload);
+  } catch (error) {
+    writeOutput("#llmwikiOutput", errorPayload(error));
+  }
+}
+
+function renderLLMWikiIndex(items) {
+  updateLLMWikiMetrics(null, items.length);
+  const rows = items
+    .map(
+      (item) => `
+        <tr>
+          <td><button data-topic="${escapeHtml(item.topic)}">${escapeHtml(item.topic)}</button></td>
+          <td>${statusBadge(item.stale ? "stale" : "compiled")}</td>
+          <td>${escapeHtml(item.source_document_count)}</td>
+          <td>${escapeHtml(item.source_chunk_count)}</td>
+          <td>${escapeHtml(item.updated_at)}</td>
+          <td>${escapeHtml((item.linked_topics || []).join(", "))}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  $("#llmwikiEvidence").innerHTML = table(["Topic", "Status", "Sources", "Evidence", "Updated", "Links"], rows);
+  $$("#llmwikiEvidence button[data-topic]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      $("#llmwikiTopic").value = button.dataset.topic;
+      await buildLLMWikiPage();
+    });
+  });
+}
+
+function renderLLMWikiLint(payload) {
+  const issues = payload.issues || [];
+  const issueRows = issues
+    .map(
+      (item) => `
+        <tr>
+          <td>${statusBadge(item.severity)}</td>
+          <td>${escapeHtml(item.code)}</td>
+          <td>${escapeHtml(item.topic || "-")}</td>
+          <td>${escapeHtml(item.message)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  const suggestions = (payload.suggested_topics || [])
+    .map((topic) => `<button data-topic="${escapeHtml(topic)}">${escapeHtml(topic)}</button>`)
+    .join("");
+  $("#llmwikiEvidence").innerHTML = `
+    ${table(["Severity", "Code", "Topic", "Message"], issueRows)}
+    <div class="wiki-links">${suggestions}</div>
+  `;
+  $$("#llmwikiEvidence button[data-topic]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      $("#llmwikiTopic").value = button.dataset.topic;
+      await buildLLMWikiPage();
+    });
+  });
+  updateLLMWikiMetrics({
+    source_document_count: payload.checked_pages,
+    source_chunk_count: issues.length,
+    linked_topics: payload.suggested_topics || [],
+  });
+}
+
+function renderLLMWikiSearch(items) {
+  const rows = items
+    .map(
+      (item) => `
+        <tr>
+          <td><button data-topic="${escapeHtml(item.topic)}">${escapeHtml(item.topic)}</button></td>
+          <td>${escapeHtml(item.evidence_count)}</td>
+          <td>${escapeHtml(item.document_count)}</td>
+          <td>${escapeHtml((item.related_topics || []).join(", "))}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  $("#llmwikiEvidence").innerHTML = table(["Topic", "Evidence", "Documents", "Related"], rows);
+  $$("#llmwikiEvidence button[data-topic]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      $("#llmwikiTopic").value = button.dataset.topic;
+      await buildLLMWikiPage();
+    });
+  });
+}
+
+function renderLLMWikiPage(page) {
+  $("#llmwikiSummary").classList.remove("muted");
+  const status = page.compiled_page_id ? (page.stale ? "Compiled, stale" : "Compiled") : "Preview";
+  $("#llmwikiSummary").innerHTML = `
+    <h3>${escapeHtml(page.topic)}</h3>
+    <div class="wiki-meta">
+      ${statusBadge(status.toLowerCase().replaceAll(" ", "-").replaceAll(",", ""))}
+      <span>${escapeHtml(page.last_compiled_at || "not persisted")}</span>
+    </div>
+    <p>${escapeHtml(page.summary || "")}</p>
+    <ul>${(page.key_points || []).map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>
+    ${(page.contradictions || []).length ? `<h4>Contradictions</h4><ul>${page.contradictions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+    ${(page.maintenance_notes || []).length ? `<h4>Maintenance</h4><ul>${page.maintenance_notes.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+  `;
+  $("#llmwikiLinks").innerHTML = (page.linked_topics || [])
+    .map((link) => `<button data-topic="${escapeHtml(link.topic)}">${escapeHtml(link.topic)}</button>`)
+    .join("");
+  $$("#llmwikiLinks button[data-topic]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      $("#llmwikiTopic").value = button.dataset.topic;
+      await buildLLMWikiPage();
+    });
+  });
+  renderLLMWikiEvidence(page.evidence || []);
+  drawLLMWikiGraph(page.graph);
+  writeOutput("#llmwikiMarkdown", page.content_markdown || "");
+  updateLLMWikiMetrics(page);
+}
+
+function renderLLMWikiEvidence(evidence) {
+  const rows = evidence
+    .map(
+      (item) => `
+        <tr>
+          <td>${escapeHtml(item.document_title || item.document_id)}</td>
+          <td>${escapeHtml(item.section_title || "-")}</td>
+          <td>${escapeHtml(item.snippet)}</td>
+          <td>${statusBadge(item.confidential_level)}</td>
+          <td>${escapeHtml(Number(item.score || 0).toFixed(2))}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  $("#llmwikiEvidence").innerHTML = table(["Document", "Section", "Snippet", "Level", "Score"], rows);
+}
+
+function updateLLMWikiMetrics(page, indexCount = null) {
+  $("#llmwikiCompiledStatus").textContent = page
+    ? page.compiled_page_id
+      ? page.stale
+        ? "Stale"
+        : "Compiled"
+      : "Preview"
+    : indexCount === null
+      ? "-"
+      : `${indexCount} pages`;
+  $("#llmwikiSourceCount").textContent = page ? page.source_document_count : "-";
+  $("#llmwikiChunkCount").textContent = page ? page.source_chunk_count : "-";
+  $("#llmwikiLinkCount").textContent = page ? (page.linked_topics || []).length : "-";
+}
+
+function drawLLMWikiGraph(graph) {
+  const container = $("#llmwikiGraph");
+  if (!graph || !graph.nodes?.length) {
+    container.innerHTML = `<div class="muted">No graph available.</div>`;
+    return;
+  }
+  const width = Math.max(container.clientWidth || 520, 420);
+  const height = 360;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radius = Math.min(width, height) * 0.35;
+  const nodes = graph.nodes.map((node, index) => {
+    if (node.type === "topic" && index === 0) return { ...node, x: centerX, y: centerY };
+    const angle = ((index - 1) / Math.max(graph.nodes.length - 1, 1)) * Math.PI * 2;
+    const nodeRadius = node.type === "document" ? radius * 0.72 : radius;
+    return {
+      ...node,
+      x: centerX + Math.cos(angle) * nodeRadius,
+      y: centerY + Math.sin(angle) * nodeRadius,
+    };
+  });
+  const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
+  const edges = (graph.edges || [])
+    .map((edge) => ({ ...edge, sourceNode: byId[edge.source], targetNode: byId[edge.target] }))
+    .filter((edge) => edge.sourceNode && edge.targetNode);
+  container.innerHTML = "";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  svg.classList.add("wiki-graph-svg");
+  edges.forEach((edge) => {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", edge.sourceNode.x);
+    line.setAttribute("y1", edge.sourceNode.y);
+    line.setAttribute("x2", edge.targetNode.x);
+    line.setAttribute("y2", edge.targetNode.y);
+    line.setAttribute("class", `wiki-edge ${edge.relation}`);
+    svg.appendChild(line);
+  });
+  nodes.forEach((node) => {
+    const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    group.setAttribute("class", `wiki-node ${node.type}`);
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", node.x);
+    circle.setAttribute("cy", node.y);
+    circle.setAttribute("r", node.type === "topic" ? 18 : node.type === "document" ? 13 : 9);
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("x", node.x);
+    label.setAttribute("y", node.y + 28);
+    label.textContent = node.label.length > 28 ? `${node.label.slice(0, 25)}...` : node.label;
+    group.append(circle, label);
+    svg.appendChild(group);
+  });
+  container.appendChild(svg);
 }
 
 function renderDocuments() {

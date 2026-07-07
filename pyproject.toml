@@ -25,6 +25,8 @@ dependencies = [
 [project.scripts]
 lm-agent-init-db = "app.db.init_db:main"
 lm-agent-db-doctor = "app.db.doctor:main"
+lm-agent-llmwiki-reset = "app.cli.llmwiki:reset_main"
+lm-agent-llmwiki-discover = "app.cli.llmwiki:discover_main"
 
 [project.optional-dependencies]
 dev = [

@@ -5,17 +5,24 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="e1efd283-5e1b-4e07-acbb-8c916ae58274" name="更改" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/LM_Agent.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docs/Auth_spec.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docs/Database_schema_spec.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docs/Fastapi_spec.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docs/Quality_spec.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docs/RAG_pipeline_spec.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/docs/System_spec.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/docs/llm_wiki.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/api/v1/router.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/api/v1/router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/core/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/db/migrations/001_initial_schema.sql" beforeDir="false" afterPath="$PROJECT_DIR$/app/db/migrations/001_initial_schema.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/integrations/embedding_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/integrations/embedding_client.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/rag/prompt_builder.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/rag/prompt_builder.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/rag/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/rag/retriever.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/repositories/document_repository.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/repositories/document_repository.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/embedding_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/embedding_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/keyword_search_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/keyword_search_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/rag_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/rag_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/vector_store_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/vector_store_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/app.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/styles.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_openai_compatible_clients.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_openai_compatible_clients.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -25,9 +32,9 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 8
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 8
+}</component>
   <component name="ProjectId" id="3G2be3TzJAedEvpbVmGi2bdQbcx" />
   <component name="ProjectLevelVcsManager" settingsEditedManually="true">
     <ConfirmationsSetting value="2" id="Add" />
@@ -39,7 +46,8 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "codex/llmwiki-feature",
     "ignore.virus.scanning.warn.message": "true"
   }
 }]]></component>

@@ -13,13 +13,15 @@ async def test_embedding_client_uses_local_openai_compatible_endpoint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["payload"] = request.read()
+        first = [0.1] * settings.embedding_dimension
+        second = [0.2] * settings.embedding_dimension
         return httpx.Response(
             200,
             json={
                 "object": "list",
                 "data": [
-                    {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]},
-                    {"object": "embedding", "index": 1, "embedding": [0.4, 0.5, 0.6]},
+                    {"object": "embedding", "index": 0, "embedding": first},
+                    {"object": "embedding", "index": 1, "embedding": second},
                 ],
                 "model": settings.embedding_model,
             },
@@ -31,7 +33,32 @@ async def test_embedding_client_uses_local_openai_compatible_endpoint() -> None:
 
     assert captured["url"] == "http://127.0.0.1:1234/v1/embeddings"
     assert b"text-embedding-mxbai-embed-large-v1" in captured["payload"]
-    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    assert len(vectors) == 2
+    assert len(vectors[0]) == settings.embedding_dimension
+    assert vectors[0][:3] == [0.1, 0.1, 0.1]
+    assert vectors[1][:3] == [0.2, 0.2, 0.2]
+
+
+@pytest.mark.asyncio
+async def test_embedding_client_truncates_oversized_vectors() -> None:
+    oversized = [float(index) for index in range(settings.embedding_dimension + 4)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": oversized}],
+                "model": settings.embedding_model,
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        vectors = await EmbeddingClient(http_client=http_client).embed(["hello"])
+
+    assert len(vectors[0]) == settings.embedding_dimension
+    assert vectors[0] == oversized[: settings.embedding_dimension]
 
 
 @pytest.mark.asyncio

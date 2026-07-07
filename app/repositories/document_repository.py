@@ -22,7 +22,16 @@ class DocumentRepository(BaseRepository[Document]):
             status=status,
             confidential_level=confidential_level,
         )
-        return list(self.db.scalars(statement.order_by(Document.created_at.desc()).offset(offset).limit(limit)))
+        return list(
+            self.db.scalars(
+                statement.order_by(
+                    (Document.status == "ready").desc(),
+                    Document.created_at.desc(),
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+        )
 
     def count(
         self,

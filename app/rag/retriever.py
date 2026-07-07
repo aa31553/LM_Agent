@@ -41,7 +41,7 @@ class HybridRetriever:
         merged = self._merge(vector_results, keyword_results)
         ranked = sorted(merged, key=lambda chunk: chunk.final_score, reverse=True)
         if use_rerank:
-            return await self.reranker.rerank(query, ranked, settings.rerank_top_n)
+            return await self.reranker.rerank(query, ranked, max(top_k, settings.rerank_top_n))
         return ranked[:top_k]
 
     def _merge(

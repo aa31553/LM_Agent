@@ -343,6 +343,17 @@ tr:last-child td {
   color: var(--warning);
 }
 
+.status.compiled {
+  background: #e7f8ef;
+  color: var(--ok);
+}
+
+.status.stale,
+.status.compiled-stale {
+  background: #fff4e5;
+  color: var(--warning);
+}
+
 .output {
   min-height: 170px;
   max-height: 420px;
@@ -364,6 +375,100 @@ tr:last-child td {
   padding: 12px;
   background: #fff;
   white-space: pre-wrap;
+}
+
+.wiki-summary {
+  min-height: 190px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.wiki-summary h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.wiki-summary p {
+  margin: 0 0 10px;
+}
+
+.wiki-summary ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.wiki-summary h4 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+}
+
+.wiki-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wiki-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.wiki-graph {
+  min-height: 360px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  overflow: hidden;
+}
+
+.wiki-graph-svg {
+  display: block;
+  width: 100%;
+  height: 360px;
+}
+
+.wiki-edge {
+  stroke: #98a2b3;
+  stroke-width: 1.2;
+}
+
+.wiki-edge.supported_by {
+  stroke: var(--accent);
+}
+
+.wiki-node circle {
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.wiki-node.topic circle {
+  fill: var(--accent);
+}
+
+.wiki-node.document circle {
+  fill: var(--accent-2);
+}
+
+.wiki-node.evidence circle {
+  fill: #475467;
+}
+
+.wiki-node text {
+  fill: var(--ink);
+  font-size: 11px;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 
 .alert {

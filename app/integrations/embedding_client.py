@@ -60,7 +60,7 @@ class EmbeddingClient:
                 status_code=502,
                 details={"expected": len(texts), "actual": len(vectors)},
             )
-        return vectors
+        return [self._normalize_dimension(vector) for vector in vectors]
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -91,3 +91,16 @@ class EmbeddingClient:
                 )
             vectors.append([float(value) for value in embedding])
         return vectors
+
+    def _normalize_dimension(self, vector: list[float]) -> list[float]:
+        expected = settings.embedding_dimension
+        if len(vector) == expected:
+            return vector
+        if len(vector) > expected:
+            return vector[:expected]
+        raise APIError(
+            ErrorCode.EMBEDDING_SERVICE_ERROR,
+            "Embedding service returned a vector with fewer dimensions than configured.",
+            status_code=502,
+            details={"expected": expected, "actual": len(vector)},
+        )

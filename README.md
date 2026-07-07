@@ -120,15 +120,16 @@ Included in the MVP:
 - Optional rerank interface
 - RAG answer generation
 - Citation building
+- LLMWiki compiled knowledge pages, graph view, index, and lint checks
 - Document and knowledge base permissions
 - DLP for query, context, and response
 - Audit logging
+- Word / Excel / PowerPoint OpenXML ingestion
+- Bounded agent tool calling for document search and document status
 - Docker Compose deployment model
 
 Out of scope for the initial MVP:
 
-- Word / Excel / PowerPoint ingestion
-- Advanced agent tool calling
 - MES / ERP integration
 - Kubernetes deployment
 - Advanced multi-tenant production hardening
@@ -222,6 +223,48 @@ Suggested retrieval parameters:
 | Rerank top_n | 5-8 |
 | Context max tokens | 4000-8000 |
 
+## LLMWiki
+
+LLMWiki complements RAG with a durable, compounding knowledge layer. RAG still
+retrieves raw chunks at query time, while LLMWiki compiles accessible indexed
+chunks into persistent topic pages that can be revisited, linted, and updated as
+new documents arrive.
+
+Chat QA now uses both layers when available:
+
+- RAG context supplies raw retrieved chunks and citations.
+- LLMWiki context supplies durable compiled topic pages, summaries, evidence
+  notes, and cross-links.
+- If raw chunk retrieval returns no results but a relevant compiled LLMWiki page
+  exists, the LLM can still answer from the compiled wiki context.
+- Query audit metadata records `llmwiki_context_used` so operators can see when
+  wiki knowledge influenced an answer.
+
+The local implementation does not depend on an external wiki program or external
+agent workflow. It stores compiled pages, evidence links, fingerprints, and
+operation logs in PostgreSQL:
+
+- `llmwiki_pages`
+- `llmwiki_page_evidence`
+- `llmwiki_operation_logs`
+
+Core operations:
+
+| Operation | Endpoint | Purpose |
+| --- | --- | --- |
+| Search | `GET /api/v1/llmwiki/search` | Find existing compiled pages or candidate topics from accessible chunks |
+| Preview | `GET /api/v1/llmwiki/topics/{topic}` | Build or read a topic page without forcing persistence |
+| Compile | `POST /api/v1/llmwiki/topics/{topic}/compile` | Persist a topic page with summary, key points, evidence, links, and graph data |
+| Index | `GET /api/v1/llmwiki/index` | List compiled pages and identify stale pages |
+| Graph | `GET /api/v1/llmwiki/topics/{topic}/graph` | Return topic/document/evidence relationships |
+| Lint | `GET /api/v1/llmwiki/lint` | Report stale pages, missing evidence, orphan pages, and candidate topics |
+| Demo | `GET /api/v1/llmwiki/demo` | Return a built-in sample page for the frontend demo |
+
+The compiler is deterministic and local: it ranks evidence chunks, extracts
+English and Chinese topic terms, builds sentence-level key points, detects simple
+contradiction signals, and preserves source evidence instead of repeatedly
+rewriting prior summaries without traceability.
+
 ## Document Processing
 
 PDF processing flow:
@@ -301,6 +344,7 @@ Main API groups:
 | Chat | `/api/v1/chat` | RAG question answering |
 | Documents | `/api/v1/documents` | Document upload and management |
 | Knowledge Bases | `/api/v1/knowledge-bases` | Knowledge base management |
+| LLMWiki | `/api/v1/llmwiki` | Durable compiled knowledge pages and graph |
 | Permissions | `/api/v1/permissions` | Permission management |
 | Audit | `/api/v1/audit` | Audit log queries |
 | Admin | `/api/v1/admin` | Administrative operations |
@@ -317,6 +361,13 @@ Important endpoints:
 - `POST /api/v1/documents/{document_id}/archive`
 - `POST /api/v1/knowledge-bases`
 - `GET /api/v1/knowledge-bases`
+- `GET /api/v1/llmwiki/search`
+- `GET /api/v1/llmwiki/index`
+- `POST /api/v1/llmwiki/topics/{topic}/compile`
+- `GET /api/v1/llmwiki/topics/{topic}`
+- `GET /api/v1/llmwiki/topics/{topic}/graph`
+- `GET /api/v1/llmwiki/lint`
+- `GET /api/v1/llmwiki/demo`
 - `POST /api/v1/chat/query`
 - `POST /api/v1/chat/stream`
 - `GET /api/v1/chat/sessions/{session_id}/messages`
@@ -537,3 +588,6 @@ This README summarizes the design documents under `docs/`:
 - `docs/Fastapi_spec.md`
 - `docs/Database_schema_spec.md`
 - `docs/Auth_spec.md`
+- `docs/admin/llmwiki.md`
+- `docs/admin/office_ingestion_and_agent_tools.md`
+- `docs/admin/sensitive_data_rules.md`

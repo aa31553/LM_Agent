@@ -222,6 +222,75 @@ CREATE TABLE IF NOT EXISTS audit_events (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS llmwiki_pages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    topic TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    content_markdown TEXT NOT NULL,
+    key_points JSONB DEFAULT '[]'::jsonb,
+    linked_topics JSONB DEFAULT '[]'::jsonb,
+    source_document_count INT DEFAULT 0,
+    source_chunk_count INT DEFAULT 0,
+    fingerprint TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (knowledge_base_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS llmwiki_topics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    canonical_topic TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    page_type TEXT NOT NULL DEFAULT 'unknown',
+    status TEXT NOT NULL DEFAULT 'candidate',
+    aliases JSONB DEFAULT '[]'::jsonb,
+    quality_score FLOAT DEFAULT 0,
+    llm_confidence FLOAT DEFAULT 0,
+    rejection_reason TEXT,
+    source_document_count INT DEFAULT 0,
+    source_chunk_count INT DEFAULT 0,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE (knowledge_base_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS llmwiki_topic_evidence (
+    topic_id UUID NOT NULL REFERENCES llmwiki_topics(id) ON DELETE CASCADE,
+    chunk_id UUID NOT NULL REFERENCES document_chunks(id),
+    document_id UUID NOT NULL REFERENCES documents(id),
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    rank INT NOT NULL,
+    signal_score FLOAT DEFAULT 0,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    PRIMARY KEY (topic_id, chunk_id)
+);
+
+CREATE TABLE IF NOT EXISTS llmwiki_page_evidence (
+    page_id UUID NOT NULL REFERENCES llmwiki_pages(id) ON DELETE CASCADE,
+    chunk_id UUID NOT NULL REFERENCES document_chunks(id),
+    document_id UUID NOT NULL REFERENCES documents(id),
+    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    rank INT NOT NULL,
+    score FLOAT DEFAULT 0,
+    snippet TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    PRIMARY KEY (page_id, chunk_id)
+);
+
+CREATE TABLE IF NOT EXISTS llmwiki_operation_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    operation TEXT NOT NULL,
+    topic TEXT,
+    message TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_documents_kb ON documents(knowledge_base_id);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_confidential_level ON documents(confidential_level);
@@ -235,6 +304,14 @@ CREATE INDEX IF NOT EXISTS idx_document_images_document_id ON document_images(do
 CREATE INDEX IF NOT EXISTS idx_document_images_kb_id ON document_images(knowledge_base_id);
 CREATE INDEX IF NOT EXISTS idx_document_images_chunk_id ON document_images(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_document_images_page ON document_images(document_id, page_number);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_pages_kb ON llmwiki_pages(knowledge_base_id);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_pages_slug ON llmwiki_pages(knowledge_base_id, slug);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_topics_kb ON llmwiki_topics(knowledge_base_id);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_topics_slug ON llmwiki_topics(knowledge_base_id, slug);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_topics_status ON llmwiki_topics(knowledge_base_id, status);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_topic_evidence_chunk ON llmwiki_topic_evidence(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_evidence_chunk ON llmwiki_page_evidence(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_llmwiki_logs_created_at ON llmwiki_operation_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding
 ON document_chunks
 USING ivfflat (embedding vector_cosine_ops)

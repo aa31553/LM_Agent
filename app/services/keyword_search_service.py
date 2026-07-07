@@ -1,3 +1,4 @@
+import re
 from uuid import UUID
 
 from sqlalchemy import text
@@ -23,6 +24,16 @@ class KeywordSearchService:
             return []
 
         permission_sql, permission_params = VectorStoreService(self.db)._permission_filter(principal)
+        terms = self._query_terms(query)
+        term_filters = " OR ".join(f"c.content ILIKE :term_{index}" for index, _ in enumerate(terms))
+        match_sql = f"({term_filters})" if term_filters else "c.content ILIKE :like_query"
+        term_score_sql = " + ".join(
+            f"CASE WHEN c.content ILIKE :term_{index} THEN 0.08 ELSE 0 END"
+            for index, _ in enumerate(terms)
+        )
+        keyword_score_sql = "similarity(c.content, :query)"
+        if term_score_sql:
+            keyword_score_sql = f"({keyword_score_sql} + {term_score_sql})"
         rows = self.db.execute(
             text(
                 f"""
@@ -31,21 +42,27 @@ class KeywordSearchService:
                     c.document_id,
                     c.content,
                     c.confidential_level,
+                    c.source_type,
+                    c.page_start,
+                    c.page_end,
+                    c.section_title,
                     c.metadata,
-                    similarity(c.content, :query) AS keyword_score
+                    COALESCE(d.title, d.original_filename, d.filename) AS document_title,
+                    {keyword_score_sql} AS keyword_score
                 FROM document_chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE c.knowledge_base_id = ANY(:knowledge_base_ids)
-                  AND c.content ILIKE :like_query
+                  AND {match_sql}
                   AND d.status = 'ready'
                   {permission_sql}
-                ORDER BY similarity(c.content, :query) DESC
+                ORDER BY keyword_score DESC
                 LIMIT :top_k
                 """
             ),
             {
                 "query": query,
                 "like_query": f"%{query}%",
+                **{f"term_{index}": f"%{term}%" for index, term in enumerate(terms)},
                 "knowledge_base_ids": [str(item) for item in knowledge_base_ids],
                 "top_k": top_k,
                 **permission_params,
@@ -63,7 +80,45 @@ class KeywordSearchService:
                 metadata={
                     **(row["metadata"] or {}),
                     "confidential_level": row["confidential_level"],
+                    "source_type": row["source_type"],
+                    "page_start": row["page_start"],
+                    "page_end": row["page_end"],
+                    "section_title": row["section_title"],
+                    "title": row["document_title"],
                 },
             )
             for row in rows
         ]
+
+    def _query_terms(self, query: str) -> list[str]:
+        stopwords = {
+            "about",
+            "after",
+            "and",
+            "are",
+            "for",
+            "from",
+            "how",
+            "into",
+            "the",
+            "this",
+            "with",
+            "與",
+            "和",
+            "的",
+            "是",
+            "在",
+            "對",
+            "請",
+            "說明",
+        }
+        terms: list[str] = []
+        for raw in re.findall(r"[A-Za-z][A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,8}", query):
+            term = raw.strip()
+            if term.lower() in stopwords or term in stopwords:
+                continue
+            if term not in terms:
+                terms.append(term)
+            if len(terms) >= 12:
+                break
+        return terms
