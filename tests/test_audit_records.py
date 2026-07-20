@@ -41,7 +41,7 @@ class FakeLLMService:
         assert "record unique phrase" in user_prompt
         assert "Image context:" in user_prompt
         assert "Figure 2 Record workflow" in user_prompt
-        assert image_paths == ["data/extracted_images/record-test/page-0001-image-001.png"]
+        assert image_paths == []
         return "The record unique phrase is available for owner@example.com."
 
 

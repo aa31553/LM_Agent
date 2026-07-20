@@ -14,8 +14,12 @@ from app.schemas.permission import (
     KnowledgeBasePermissionCreate,
     KnowledgeBasePermissionResponse,
     KnowledgeBasePermissionsResponse,
+    SkillPermissionCreate,
+    SkillPermissionResponse,
+    SkillPermissionsResponse,
 )
 from app.services.permission_service import PermissionService
+from app.services.skill_service import SkillPermissionRecord, SkillService
 
 router = APIRouter()
 
@@ -136,3 +140,60 @@ async def delete_knowledge_base_permission(
     if "admin" not in principal.roles:
         raise APIError(ErrorCode.PERMISSION_DENIED, "Admin role is required.", status_code=403)
     PermissionService(db).delete_knowledge_base_permission(permission_id)
+
+
+@router.post("/skills/{skill_name}", response_model=SkillPermissionResponse)
+async def set_skill_permission(
+    skill_name: str,
+    payload: SkillPermissionCreate,
+    principal: Principal = Depends(get_current_principal),
+) -> SkillPermissionResponse:
+    _ensure_admin(principal)
+    record = SkillService().create_or_update_permission(
+        skill_name,
+        subject_type=payload.subject_type,
+        subject_value=payload.subject_value,
+        permission=payload.permission,
+    )
+    return _skill_permission_response(skill_name, record)
+
+
+@router.get("/skills/{skill_name}", response_model=SkillPermissionsResponse)
+async def list_skill_permissions(
+    skill_name: str,
+    principal: Principal = Depends(get_current_principal),
+) -> SkillPermissionsResponse:
+    _ensure_admin(principal)
+    records = SkillService().list_permissions(skill_name)
+    return SkillPermissionsResponse(
+        skill_name=skill_name,
+        permissions=[_skill_permission_response(skill_name, item) for item in records],
+    )
+
+
+@router.delete("/skills/{skill_name}/{permission_id}", status_code=204)
+async def delete_skill_permission(
+    skill_name: str,
+    permission_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+) -> None:
+    _ensure_admin(principal)
+    SkillService().delete_permission(skill_name, permission_id)
+
+
+def _skill_permission_response(
+    skill_name: str,
+    record: SkillPermissionRecord,
+) -> SkillPermissionResponse:
+    return SkillPermissionResponse(
+        permission_id=record.permission_id,
+        skill_name=skill_name,
+        subject_type=record.subject_type,
+        subject_value=record.subject_value,
+        permission=record.permission,
+    )
+
+
+def _ensure_admin(principal: Principal) -> None:
+    if "admin" not in principal.roles:
+        raise APIError(ErrorCode.PERMISSION_DENIED, "Admin role is required.", status_code=403)

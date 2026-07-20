@@ -16,16 +16,18 @@ Legacy binary Office files (`.doc`, `.xls`, `.ppt`) are not accepted. Convert th
 Office files use the same indexing pipeline as PDF and image uploads:
 
 1. Upload file through `POST /api/v1/documents/upload`.
-2. File is saved to local storage.
-3. The background document job parses Office text.
-4. Text is chunked with source metadata:
-   - `docx_text`
-   - `xlsx_text`
-   - `pptx_text`
-5. Chunks are embedded and indexed.
+2. The original file is saved under `LOCAL_STORAGE_ROOT/originals/`.
+3. The background document job invokes Microsoft MarkItDown through its local-file-only API.
+4. UTF-8 Markdown is saved under `LOCAL_STORAGE_ROOT/markdown/`.
+5. Markdown is chunked with `source_type=markdown`, embedded, and indexed.
 6. Document status becomes `ready`.
 
-No Microsoft Office, LibreOffice, or external converter is required. The parser reads OpenXML package contents directly.
+No Microsoft Office or LibreOffice installation is required. MarkItDown's format-specific
+dependencies are installed with the application.
+
+PDFs and images use the same normalization boundary. Scanned PDFs and direct image uploads
+keep the existing local OCR fallback, then write the OCR result into the generated Markdown.
+The LLM receives Markdown-derived context only, never the uploaded binary.
 
 ## Upload Example
 

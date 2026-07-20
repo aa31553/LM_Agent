@@ -3,6 +3,7 @@ const tabs = {
   overview: "狀態",
   knowledge: "知識庫",
   documents: "文件",
+  skills: "Skills",
   chat: "問答",
   admin: "管理稽核",
   llmwiki: "LLMWiki",
@@ -17,6 +18,8 @@ const state = {
   sessionId: localStorage.getItem("lmAgentSessionId") || "",
   knowledgeBases: [],
   documents: [],
+  skills: [],
+  selectedSkillName: localStorage.getItem("lmAgentSkillName") || "",
   llmwikiPage: null,
 };
 
@@ -52,6 +55,7 @@ function renderAll() {
   renderKnowledge();
   renderLLMWiki();
   renderDocuments();
+  renderSkills();
   renderChat();
   renderAdmin();
   renderRaw();
@@ -64,7 +68,12 @@ function activateTab(tab) {
 }
 
 async function loadStartupData() {
-  await Promise.allSettled([refreshKnowledgeBases(), refreshDocuments(), refreshOverview()]);
+  await Promise.allSettled([
+    refreshKnowledgeBases(),
+    refreshDocuments(),
+    refreshSkills(),
+    refreshOverview(),
+  ]);
 }
 
 function newRequestId() {
@@ -944,6 +953,404 @@ async function deletePermission() {
     writeOutput("#permissionOutput", "deleted");
   } catch (error) {
     writeOutput("#permissionOutput", errorPayload(error));
+  }
+}
+
+function renderSkills() {
+  $("#skills").innerHTML = `
+    <div class="grid">
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Skill editor</h2>
+            <div class="actions">
+              <button id="newSkillBtn">New</button>
+              <button class="primary" id="createSkillBtn">Create</button>
+              <button id="updateSkillBtn">Update</button>
+              <button class="danger" id="deleteSkillBtn">Delete</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label>Name<input id="skillName" placeholder="research-helper" /></label>
+            <label><input id="skillEnabled" type="checkbox" checked /> Enabled</label>
+            <label class="full">Description<textarea id="skillDescription" rows="3" placeholder="What the skill does and when to use it"></textarea></label>
+            <label class="full">SKILL.md instructions<textarea id="skillInstructions" rows="12" placeholder="# Workflow"></textarea></label>
+          </div>
+          <div id="skillOutput" class="output compact-output"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Installed skills</h2>
+            <button id="refreshSkillsBtn">Refresh</button>
+          </div>
+          <div id="skillTable"></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
+          <div>
+            <h2>Skill access</h2>
+            <p class="muted">No rules means open access. Once a rule exists, only matching users, departments, roles, and administrators can use this skill.</p>
+          </div>
+          <button class="primary" id="addSkillPermissionBtn">Add / update rule</button>
+        </div>
+        <div class="form-grid">
+          <label>Subject type
+            <select id="skillPermissionSubjectType">
+              <option value="user">User</option>
+              <option value="department">Department</option>
+              <option value="role">Role</option>
+            </select>
+          </label>
+          <label class="wide">Subject value<input id="skillPermissionSubjectValue" placeholder="user id, department, or role" /></label>
+          <label>Permission
+            <select id="skillPermissionLevel">
+              <option value="read">Read / use</option>
+              <option value="admin">Admin access</option>
+            </select>
+          </label>
+        </div>
+        <div id="skillPermissions"></div>
+        <div id="skillPermissionOutput" class="output compact-output"></div>
+      </div>
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Bundled files</h2>
+            <button class="primary" id="uploadSkillFileBtn">Upload / replace</button>
+          </div>
+          <div class="form-grid">
+            <label class="wide">File<input id="skillResourceFile" type="file" /></label>
+            <label class="wide">Relative path<input id="skillResourcePath" placeholder="references/policy.md" /></label>
+            <label><input id="skillFileOverwrite" type="checkbox" /> Overwrite</label>
+          </div>
+          <div id="skillFiles"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Raw file preview</h2>
+            <span id="skillPreviewLink" class="muted"></span>
+          </div>
+          <div id="skillPreview" class="output skill-preview">Select a skill file to view its original content.</div>
+        </div>
+      </div>
+    </div>
+  `;
+  $("#newSkillBtn").addEventListener("click", resetSkillForm);
+  $("#createSkillBtn").addEventListener("click", createSkill);
+  $("#updateSkillBtn").addEventListener("click", updateSkill);
+  $("#deleteSkillBtn").addEventListener("click", deleteSkill);
+  $("#refreshSkillsBtn").addEventListener("click", refreshSkills);
+  $("#uploadSkillFileBtn").addEventListener("click", uploadSkillFile);
+  $("#addSkillPermissionBtn").addEventListener("click", setSkillPermission);
+  renderSkillTable();
+  renderSkillFiles([]);
+  renderSkillPermissions([]);
+}
+
+async function refreshSkills() {
+  try {
+    const payload = await api("/skills");
+    state.skills = payload.items || [];
+    renderSkillTable();
+    if (state.selectedSkillName && state.skills.some((item) => item.name === state.selectedSkillName)) {
+      await selectSkill(state.selectedSkillName, false);
+    }
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+function renderSkillTable() {
+  const node = $("#skillTable");
+  if (!node) return;
+  const rows = state.skills
+    .map(
+      (item) => `
+        <tr>
+          <td><code>$${escapeHtml(item.name)}</code></td>
+          <td>${statusBadge(item.enabled ? "enabled" : "disabled")}</td>
+          <td>${item.is_system ? "system" : "custom"}</td>
+          <td>${item.permission_count ? `restricted (${escapeHtml(item.permission_count)})` : "open"}</td>
+          <td>${escapeHtml(item.file_count)}</td>
+          <td><button data-skill-name="${escapeHtml(item.name)}">Open</button></td>
+        </tr>
+      `,
+    )
+    .join("");
+  node.innerHTML = table(["Skill", "Status", "Type", "Access", "Files", ""], rows);
+  $$("#skillTable button").forEach((button) => {
+    button.addEventListener("click", () => selectSkill(button.dataset.skillName));
+  });
+}
+
+async function selectSkill(name, previewMainFile = true) {
+  try {
+    const detail = await api(`/skills/${encodeURIComponent(name)}`);
+    state.selectedSkillName = detail.name;
+    localStorage.setItem("lmAgentSkillName", detail.name);
+    $("#skillName").value = detail.name;
+    $("#skillName").readOnly = true;
+    $("#skillDescription").value = detail.description;
+    $("#skillInstructions").value = detail.instructions;
+    $("#skillEnabled").checked = detail.enabled;
+    $("#deleteSkillBtn").disabled = detail.is_system;
+    renderSkillFiles(detail.files || []);
+    await refreshSkillPermissions(detail.name);
+    writeOutput("#skillOutput", detail);
+    if (previewMainFile) {
+      const mainFile = (detail.files || []).find((item) => item.relative_path === "SKILL.md");
+      if (mainFile) await previewSkillFile(mainFile);
+    }
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+function resetSkillForm() {
+  state.selectedSkillName = "";
+  localStorage.removeItem("lmAgentSkillName");
+  $("#skillName").value = "";
+  $("#skillName").readOnly = false;
+  $("#skillDescription").value = "";
+  $("#skillInstructions").value = "# Instructions\n\n";
+  $("#skillEnabled").checked = true;
+  $("#deleteSkillBtn").disabled = false;
+  renderSkillFiles([]);
+  renderSkillPermissions([]);
+  $("#skillPermissionOutput").textContent = "";
+  $("#skillPreviewLink").textContent = "";
+  $("#skillPreview").textContent = "Create or select a skill.";
+}
+
+async function createSkill() {
+  try {
+    const payload = await api("/skills", {
+      method: "POST",
+      json: {
+        name: $("#skillName").value.trim(),
+        description: $("#skillDescription").value.trim(),
+        instructions: $("#skillInstructions").value.trim(),
+        enabled: $("#skillEnabled").checked,
+      },
+    });
+    state.selectedSkillName = payload.name;
+    localStorage.setItem("lmAgentSkillName", payload.name);
+    await refreshSkills();
+    await selectSkill(payload.name);
+    showAlert(`Created $${payload.name}`, "success");
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+async function updateSkill() {
+  try {
+    const name = state.selectedSkillName || $("#skillName").value.trim();
+    if (!name) throw new Error("Select a skill first.");
+    const payload = await api(`/skills/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      json: {
+        description: $("#skillDescription").value.trim(),
+        instructions: $("#skillInstructions").value.trim(),
+        enabled: $("#skillEnabled").checked,
+      },
+    });
+    await refreshSkills();
+    await selectSkill(payload.name);
+    showAlert(`Updated $${payload.name}`, "success");
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+async function deleteSkill() {
+  try {
+    const name = state.selectedSkillName;
+    if (!name) throw new Error("Select a skill first.");
+    if (!window.confirm(`Delete $${name} and all bundled files?`)) return;
+    await api(`/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+    resetSkillForm();
+    await refreshSkills();
+    showAlert(`Deleted $${name}`, "success");
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+function renderSkillFiles(files) {
+  const node = $("#skillFiles");
+  if (!node) return;
+  const rows = files
+    .map(
+      (file) => `
+        <tr>
+          <td><code>${escapeHtml(file.relative_path)}</code></td>
+          <td>${escapeHtml(file.mime_type)}</td>
+          <td>${escapeHtml(file.size)}</td>
+          <td class="actions">
+            <button data-skill-file="view" data-file-path="${escapeHtml(file.relative_path)}">View</button>
+            ${file.relative_path === "SKILL.md" ? "" : `<button class="danger" data-skill-file="delete" data-file-path="${escapeHtml(file.relative_path)}">Delete</button>`}
+          </td>
+        </tr>
+      `,
+    )
+    .join("");
+  node.innerHTML = table(["Path", "Type", "Bytes", ""], rows);
+  $$("#skillFiles button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const detail = await api(`/skills/${encodeURIComponent(state.selectedSkillName)}`);
+      const file = detail.files.find((item) => item.relative_path === button.dataset.filePath);
+      if (!file) return;
+      if (button.dataset.skillFile === "view") await previewSkillFile(file);
+      if (button.dataset.skillFile === "delete") await deleteSkillFile(file);
+    });
+  });
+}
+
+async function uploadSkillFile() {
+  try {
+    if (!state.selectedSkillName) throw new Error("Select a skill first.");
+    const file = $("#skillResourceFile").files[0];
+    if (!file) throw new Error("Select a file to upload.");
+    const form = new FormData();
+    form.append("file", file);
+    form.append("relative_path", $("#skillResourcePath").value.trim() || file.name);
+    form.append("overwrite", $("#skillFileOverwrite").checked ? "true" : "false");
+    const payload = await api(`/skills/${encodeURIComponent(state.selectedSkillName)}/files`, {
+      method: "POST",
+      body: form,
+    });
+    await selectSkill(state.selectedSkillName, false);
+    await previewSkillFile(payload.file);
+    showAlert(`Uploaded ${payload.file.relative_path}`, "success");
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+async function deleteSkillFile(file) {
+  try {
+    if (!window.confirm(`Delete ${file.relative_path}?`)) return;
+    const encodedPath = file.relative_path.split("/").map(encodeURIComponent).join("/");
+    await api(`/skills/${encodeURIComponent(state.selectedSkillName)}/files/${encodedPath}`, {
+      method: "DELETE",
+    });
+    await selectSkill(state.selectedSkillName, false);
+    $("#skillPreview").textContent = "File deleted.";
+  } catch (error) {
+    writeOutput("#skillOutput", errorPayload(error));
+  }
+}
+
+async function refreshSkillPermissions(name = state.selectedSkillName) {
+  if (!name) {
+    renderSkillPermissions([]);
+    return;
+  }
+  try {
+    const payload = await api(`/permissions/skills/${encodeURIComponent(name)}`);
+    renderSkillPermissions(payload.permissions || []);
+    $("#skillPermissionOutput").textContent = "";
+  } catch (error) {
+    renderSkillPermissions([]);
+    writeOutput("#skillPermissionOutput", errorPayload(error));
+  }
+}
+
+function renderSkillPermissions(permissions) {
+  const node = $("#skillPermissions");
+  if (!node) return;
+  const rows = permissions
+    .map(
+      (permission) => `
+        <tr>
+          <td>${escapeHtml(permission.subject_type)}</td>
+          <td><code>${escapeHtml(permission.subject_value)}</code></td>
+          <td>${escapeHtml(permission.permission)}</td>
+          <td><button class="danger" data-skill-permission-id="${escapeHtml(permission.permission_id)}">Delete</button></td>
+        </tr>
+      `,
+    )
+    .join("");
+  node.innerHTML = table(["Subject type", "Subject", "Permission", ""], rows);
+  $$("#skillPermissions button").forEach((button) => {
+    button.addEventListener("click", () => deleteSkillPermission(button.dataset.skillPermissionId));
+  });
+}
+
+async function setSkillPermission() {
+  try {
+    if (!state.selectedSkillName) throw new Error("Select a skill first.");
+    const subjectValue = $("#skillPermissionSubjectValue").value.trim();
+    if (!subjectValue) throw new Error("Enter a permission subject.");
+    await api(`/permissions/skills/${encodeURIComponent(state.selectedSkillName)}`, {
+      method: "POST",
+      json: {
+        subject_type: $("#skillPermissionSubjectType").value,
+        subject_value: subjectValue,
+        permission: $("#skillPermissionLevel").value,
+      },
+    });
+    $("#skillPermissionSubjectValue").value = "";
+    await refreshSkillPermissions();
+    await refreshSkills();
+    showAlert("Skill permission saved", "success");
+  } catch (error) {
+    writeOutput("#skillPermissionOutput", errorPayload(error));
+  }
+}
+
+async function deleteSkillPermission(permissionId) {
+  try {
+    if (!state.selectedSkillName) throw new Error("Select a skill first.");
+    if (!window.confirm("Delete this skill permission?")) return;
+    await api(
+      `/permissions/skills/${encodeURIComponent(state.selectedSkillName)}/${encodeURIComponent(permissionId)}`,
+      { method: "DELETE" },
+    );
+    await refreshSkillPermissions();
+    await refreshSkills();
+    showAlert("Skill permission deleted", "success");
+  } catch (error) {
+    writeOutput("#skillPermissionOutput", errorPayload(error));
+  }
+}
+
+async function previewSkillFile(file) {
+  const preview = $("#skillPreview");
+  try {
+    const rawUrl = new URL(file.raw_url, API_PREFIX).toString();
+    const response = await fetch(rawUrl, {
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+        "X-Request-ID": state.requestId,
+      },
+    });
+    if (!response.ok) throw new Error(`Unable to load ${file.relative_path}`);
+    $("#skillPreviewLink").textContent = file.raw_url;
+    preview.innerHTML = "";
+    if (file.is_text) {
+      preview.textContent = await response.text();
+      return;
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    if (file.mime_type.startsWith("image/")) {
+      const image = document.createElement("img");
+      image.src = objectUrl;
+      image.alt = file.relative_path;
+      image.className = "skill-preview-image";
+      preview.appendChild(image);
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = file.relative_path.split("/").pop();
+    link.textContent = `Open original ${file.relative_path}`;
+    preview.appendChild(link);
+  } catch (error) {
+    preview.textContent = error.message;
   }
 }
 

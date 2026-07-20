@@ -3,8 +3,9 @@ from pathlib import Path
 from sqlalchemy.exc import ProgrammingError
 
 
-def _migration_sql_path() -> Path:
-    return Path(__file__).resolve().parent / "migrations" / "001_initial_schema.sql"
+def _migration_sql_paths() -> list[Path]:
+    migration_dir = Path(__file__).resolve().parent / "migrations"
+    return sorted(migration_dir.glob("*.sql"))
 
 
 def init_db() -> None:
@@ -12,12 +13,11 @@ def init_db() -> None:
 
     from app.db.session import engine
 
-    migration_path = _migration_sql_path()
-    sql = migration_path.read_text(encoding="utf-8")
-
     try:
         with engine.begin() as connection:
-            connection.execute(text(sql))
+            for migration_path in _migration_sql_paths():
+                sql = migration_path.read_text(encoding="utf-8")
+                connection.execute(text(sql))
     except ProgrammingError as exc:
         if "permission denied to create extension" in str(exc).lower():
             admin_sql = Path(__file__).resolve().parent / "admin_extensions.sql"
@@ -31,7 +31,8 @@ def init_db() -> None:
 
 def main() -> None:
     init_db()
-    print(f"Initialized database schema from {_migration_sql_path()}")
+    applied = ", ".join(path.name for path in _migration_sql_paths())
+    print(f"Initialized database schema from: {applied}")
 
 
 if __name__ == "__main__":

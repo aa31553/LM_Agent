@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import re
 
 from app.services.pdf_parser_service import ParsedPage
 from app.models.document_image import DocumentImage
@@ -53,6 +54,37 @@ class ChunkingService:
 
         if buffer:
             chunks.append(self._build_page_chunk(len(chunks), buffer, buffer_pages, source_type))
+        return chunks
+
+    def chunk_markdown(
+        self,
+        markdown: str,
+        chunk_size: int = 700,
+        overlap: int = 120,
+        markdown_path: str | None = None,
+        metadata: dict | None = None,
+    ) -> list[TextChunk]:
+        """Chunk Markdown without flattening its headings, tables, or line breaks."""
+        tokens = re.findall(r"\S+\s*", markdown)
+        chunks: list[TextChunk] = []
+        start = 0
+        while start < len(tokens):
+            end = min(start + chunk_size, len(tokens))
+            content = "".join(tokens[start:end]).strip()
+            chunk_metadata = {"source_type": "markdown", **(metadata or {})}
+            if markdown_path:
+                chunk_metadata["markdown_path"] = markdown_path
+            chunks.append(
+                TextChunk(
+                    chunk_index=len(chunks),
+                    content=content,
+                    token_count=count_tokens(content),
+                    metadata=chunk_metadata,
+                )
+            )
+            if end == len(tokens):
+                break
+            start = max(end - overlap, start + 1)
         return chunks
 
     def chunk_images(

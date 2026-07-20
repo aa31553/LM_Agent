@@ -21,6 +21,7 @@ from app.services.image_context_service import ImageContextService
 from app.services.llm_service import LLMService
 from app.services.llmwiki_service import LLMWikiService
 from app.services.masking_service import MaskingService
+from app.services.skill_service import SkillService
 from app.services.vector_store_service import RetrievedChunk
 
 
@@ -39,6 +40,7 @@ class RAGService:
         self.audit_service = AuditService(db)
         self.image_context_service = ImageContextService(db)
         self.llmwiki_service = LLMWikiService(db)
+        self.skill_service = SkillService()
 
     async def answer(
         self,
@@ -164,6 +166,7 @@ class RAGService:
         context_dlp = self.masking_service.scan_and_mask(context, location="context")
         image_context_dlp = self.masking_service.scan_and_mask(image_context, location="context")
         llmwiki_context_dlp = self.masking_service.scan_and_mask(llmwiki_context, location="context")
+        skill_resolution = self.skill_service.resolve_context(processed_query, principal)
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
@@ -172,6 +175,7 @@ class RAGService:
             retrieved_context=context_dlp.text,
             image_context=image_context_dlp.text,
             llmwiki_context=llmwiki_context_dlp.text,
+            skill_context=skill_resolution.prompt,
         )
         tool_traces = []
         if payload.use_tools:
@@ -224,7 +228,7 @@ class RAGService:
                 operation=lambda: self.llm_service.complete(
                     system_prompt,
                     user_prompt,
-                    image_paths=[image.image_path for image in image_models],
+                    image_paths=[],
                 ),
             )
         response_dlp = self.masking_service.scan_and_mask(answer, location="response")
@@ -248,6 +252,7 @@ class RAGService:
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
                 "llmwiki_context_used": bool(llmwiki_context_dlp.text),
+                "skills_used": skill_resolution.triggered_names,
                 "tool_call_count": len(tool_traces),
                 "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
                 "assistant_message_id": str(assistant_message.id),
@@ -424,6 +429,7 @@ class RAGService:
         context_dlp = self.masking_service.scan_and_mask(context, location="context")
         image_context_dlp = self.masking_service.scan_and_mask(image_context, location="context")
         llmwiki_context_dlp = self.masking_service.scan_and_mask(llmwiki_context, location="context")
+        skill_resolution = self.skill_service.resolve_context(processed_query, principal)
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
@@ -432,6 +438,7 @@ class RAGService:
             retrieved_context=context_dlp.text,
             image_context=image_context_dlp.text,
             llmwiki_context=llmwiki_context_dlp.text,
+            skill_context=skill_resolution.prompt,
         )
 
         answer_parts: list[str] = []
@@ -486,7 +493,7 @@ class RAGService:
                 async for delta in self.llm_service.stream_complete(
                     system_prompt,
                     user_prompt,
-                    image_paths=[image.image_path for image in image_models],
+                    image_paths=[],
                 ):
                     answer_parts.append(delta)
                     yield {"event": "delta", "text": delta}
@@ -544,6 +551,7 @@ class RAGService:
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
                 "llmwiki_context_used": bool(llmwiki_context_dlp.text),
+                "skills_used": skill_resolution.triggered_names,
                 "tool_call_count": len(tool_traces),
                 "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
                 "assistant_message_id": str(assistant_message.id),

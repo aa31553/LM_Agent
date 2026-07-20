@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.1"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://localhost:6379/0"
     local_storage_root: str = "data/uploads"
+    skills_root: str = "data/skills"
+    skill_max_file_bytes: int = Field(default=10_000_000, ge=1)
     tesseract_cmd: str = ""
 
     embedding_endpoint: str = "http://127.0.0.1:1234/v1/embeddings"

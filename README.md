@@ -265,51 +265,72 @@ English and Chinese topic terms, builds sentence-level key points, detects simpl
 contradiction signals, and preserves source evidence instead of repeatedly
 rewriting prior summaries without traceability.
 
-## Document Processing
+## Agent Skills
 
-PDF processing flow:
+The application supports Claude-style filesystem Skills with progressive disclosure:
 
 ```text
-PDF Upload
+SKILLS_ROOT/
+  skill-name/
+    SKILL.md              # required YAML metadata + instructions
+    agents/openai.yaml    # UI metadata
+    scripts/              # optional executable utilities
+    references/           # optional on-demand knowledge
+    assets/               # optional templates and media
+```
+
+Three enabled system Skills are installed automatically: `skill-creator`,
+`document-analysis`, and the always-on `secure-rag`. Chat requests receive the metadata of
+enabled Skills; full instructions are included only for explicitly invoked (`$skill-name`),
+automatically matched, or always-on Skills.
+
+Skill access can be restricted by user, department, or role. With no rules a Skill is open to
+authenticated users; once any rule is added, only matching principals and administrators can
+list, read, preview, or activate it. Unauthorized Skills are excluded before LLM prompt
+construction, even when requested explicitly with `$skill-name`. Create, update, delete,
+enable/disable, bundled-file mutations, and permission management require the `admin` role.
+System Skills can be edited or disabled but cannot be deleted. The frontend Skills tab exposes
+CRUD controls, access-rule management, authenticated raw-file links, and inline previews.
+
+See [Skills administration](docs/admin/skills.md) for the API and storage contract.
+
+## Document Processing
+
+Every supported upload is normalized through Microsoft MarkItDown before indexing. The
+original artifact and its generated Markdown are retained separately:
+
+```text
+LOCAL_STORAGE_ROOT/
+  originals/   # immutable uploaded files
+  markdown/    # UTF-8 Markdown used for chunking, retrieval, and LLM context
+```
+
+Processing flow:
+
+```text
+PDF / Office / Image Upload
   ->
-Extract Metadata
+Save Original Artifact
   ->
-Check Text Extractability
+MarkItDown convert_local()
   ->
-Extract Text or Run OCR
+OCR fallback for scanned PDFs and images
   ->
-Clean Text
+Save Markdown Artifact
   ->
 Detect Language
   ->
-Detect Sections
-  ->
-Chunk Text
+Chunk Markdown while preserving headings, tables, and line breaks
   ->
 Embed Chunks
   ->
 Store Chunks and Vectors
 ```
 
-Image processing flow:
-
-```text
-Image Upload
-  ->
-Image Preprocess
-  ->
-OCR
-  ->
-Layout Reconstruction
-  ->
-Clean Text
-  ->
-Chunk Text
-  ->
-Embed Chunks
-  ->
-Store Chunks and Vectors
-```
+`documents.file_path` points to the original artifact and `documents.markdown_path`
+points to the generated Markdown. Retrieval chunks always use `source_type=markdown`.
+LLM requests receive Markdown-derived text context only; original files and binary images
+are not attached to model calls.
 
 Document status values:
 
@@ -343,6 +364,7 @@ Main API groups:
 | Health | `/api/v1/health` | Service and dependency health |
 | Chat | `/api/v1/chat` | RAG question answering |
 | Documents | `/api/v1/documents` | Document upload and management |
+| Skills | `/api/v1/skills` | Skill CRUD, bundled files, and raw previews |
 | Knowledge Bases | `/api/v1/knowledge-bases` | Knowledge base management |
 | LLMWiki | `/api/v1/llmwiki` | Durable compiled knowledge pages and graph |
 | Permissions | `/api/v1/permissions` | Permission management |
@@ -354,6 +376,14 @@ Important endpoints:
 - `GET /api/v1/health`
 - `GET /api/v1/health/dependencies`
 - `POST /api/v1/documents/upload`
+- `GET /api/v1/skills`
+- `POST /api/v1/skills`
+- `GET /api/v1/skills/{name}`
+- `PATCH /api/v1/skills/{name}`
+- `DELETE /api/v1/skills/{name}`
+- `POST /api/v1/skills/{name}/files`
+- `GET /api/v1/skills/{name}/files/{file_path}`
+- `DELETE /api/v1/skills/{name}/files/{file_path}`
 - `GET /api/v1/documents`
 - `GET /api/v1/documents/{document_id}/status`
 - `GET /api/v1/documents/{document_id}`

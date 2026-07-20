@@ -28,8 +28,9 @@ from app.schemas.document import (
 from app.services.chunking_service import ChunkingService, TextChunk
 from app.services.embedding_service import EmbeddingService
 from app.services.image_ocr_service import ImageOCRService, OCRUnavailableError
+from app.services.markdown_conversion_service import MarkdownConversionService
 from app.services.office_parser_service import OfficeParserService
-from app.services.pdf_parser_service import PDFParserService, ParsedDocument, ParsedPage
+from app.services.pdf_parser_service import PDFParserService
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
 from app.services.processing_queue_service import ProcessingQueueService
 from app.storage.local_storage import LocalStorage
@@ -52,6 +53,7 @@ class DocumentIngestionService:
         embedding_service: EmbeddingService | None = None,
         image_extraction_service: PDFImageExtractionService | None = None,
         office_parser: OfficeParserService | None = None,
+        markdown_converter: MarkdownConversionService | None = None,
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
@@ -61,6 +63,7 @@ class DocumentIngestionService:
         self.embedding_service = embedding_service or EmbeddingService()
         self.image_extraction_service = image_extraction_service or PDFImageExtractionService()
         self.office_parser = office_parser or OfficeParserService()
+        self.markdown_converter = markdown_converter or MarkdownConversionService()
 
     async def queue_upload(
         self,
@@ -179,7 +182,7 @@ class DocumentIngestionService:
             )
 
         filename = f"{uuid4()}-{Path(original_filename).name}"
-        file_path = await self.storage.save(filename, content)
+        file_path = await self.storage.save_original(filename, content)
         document = Document(
             knowledge_base_id=knowledge_base_id,
             filename=filename,
@@ -187,6 +190,7 @@ class DocumentIngestionService:
             title=Path(original_filename).stem,
             file_type=file_type,
             file_path=file_path,
+            markdown_path=None,
             source_type=document_type or "manual_upload",
             language=None,
             confidential_level=confidential_level.value,
@@ -332,6 +336,7 @@ class DocumentIngestionService:
         DocumentImageRepository(self.db).delete_by_document_id(document.id)
         ChunkRepository(self.db).delete_by_document_id(document.id)
         document.chunk_count = 0
+        document.markdown_path = None
         document.error_message = None
         document.ocr_required = False
         document.ocr_confidence = None
@@ -343,6 +348,7 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
 
+        converted_markdown = await self.markdown_converter.convert_local(document.file_path)
         parsed = await self.pdf_parser.parse(document.file_path)
         document.page_count = parsed.page_count
         document.ocr_required = parsed.ocr_required
@@ -365,28 +371,38 @@ class DocumentIngestionService:
             document.page_count = parsed.page_count
             document.ocr_confidence = parsed.ocr_confidence
             document.ocr_required = parsed.ocr_required
+            converted_markdown = self.markdown_converter.from_extracted_text(
+                document.title,
+                parsed.text,
+            )
 
         image_models = await self.image_extraction_service.extract(document, parsed)
         if image_models:
             DocumentImageRepository(self.db).add_many(image_models)
             self.db.flush()
 
-        if not parsed.text.strip() and not image_models:
+        if not converted_markdown.strip() and parsed.text.strip():
+            converted_markdown = self.markdown_converter.from_extracted_text(
+                document.title,
+                parsed.text,
+            )
+        converted_markdown = self._append_image_markdown(converted_markdown, image_models)
+        if not converted_markdown.strip():
             document.status = DocumentStatus.FAILED.value
             document.error_message = "Document did not contain extractable text."
             document.updated_at = datetime.utcnow()
             self.db.commit()
             return
 
+        markdown_path = await self._save_markdown_artifact(document, converted_markdown)
         document.status = DocumentStatus.CHUNKING.value
-        language_source = parsed.text or " ".join(
-            item.caption or item.ocr_text or "" for item in image_models
-        )
-        document.language = detect_language(language_source)
+        document.language = detect_language(converted_markdown)
         self.db.commit()
 
-        chunks = self.chunking_service.chunk_pages(parsed.pages)
-        chunks.extend(self.chunking_service.chunk_images(image_models, start_index=len(chunks)))
+        chunks = self.chunking_service.chunk_markdown(
+            converted_markdown,
+            markdown_path=markdown_path,
+        )
         if not chunks:
             raise APIError(ErrorCode.INVALID_REQUEST, "Document did not produce any chunks.", 400)
 
@@ -402,7 +418,6 @@ class DocumentIngestionService:
         ]
         ChunkRepository(self.db).add_many(chunk_models)
         self.db.flush()
-        self._link_images_to_chunks(image_models, chunks, chunk_models)
         document.chunk_count = len(chunk_models)
         document.status = DocumentStatus.READY.value
         document.error_message = None
@@ -415,25 +430,32 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
 
+        converted_markdown = await self.markdown_converter.convert_local(document.file_path)
         parsed = await self.office_parser.parse(document.file_path, file_type=document.file_type)
         document.page_count = parsed.page_count
         document.ocr_required = False
         document.ocr_confidence = None
 
-        if not parsed.text.strip():
+        if not converted_markdown.strip() and parsed.text.strip():
+            converted_markdown = self.markdown_converter.from_extracted_text(
+                document.title,
+                parsed.text,
+            )
+        if not converted_markdown.strip():
             document.status = DocumentStatus.FAILED.value
             document.error_message = "Office document did not contain extractable text."
             document.updated_at = datetime.utcnow()
             self.db.commit()
             return
 
+        markdown_path = await self._save_markdown_artifact(document, converted_markdown)
         document.status = DocumentStatus.CHUNKING.value
-        document.language = detect_language(parsed.text)
+        document.language = detect_language(converted_markdown)
         self.db.commit()
 
-        chunks = self.chunking_service.chunk_pages(
-            parsed.pages,
-            source_type=f"{document.file_type}_text",
+        chunks = self.chunking_service.chunk_markdown(
+            converted_markdown,
+            markdown_path=markdown_path,
         )
         if not chunks:
             raise APIError(ErrorCode.INVALID_REQUEST, "Office document did not produce any chunks.", 400)
@@ -464,6 +486,7 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
 
+        converted_markdown = await self.markdown_converter.convert_local(document.file_path)
         try:
             result = await self.ocr_service.run_ocr(document.file_path)
         except OCRUnavailableError as exc:
@@ -500,29 +523,25 @@ class DocumentIngestionService:
             self.db.commit()
             return
 
+        converted_markdown = self.markdown_converter.combine_image_ocr(
+            document.title,
+            ocr_text,
+            converted_markdown,
+        )
+        markdown_path = await self._save_markdown_artifact(document, converted_markdown)
         document.status = DocumentStatus.CHUNKING.value
-        document.language = detect_language(ocr_text)
+        document.language = detect_language(converted_markdown)
         self.db.commit()
 
-        parsed = ParsedDocument(
-            pages=[
-                ParsedPage(
-                    page_number=1,
-                    text=ocr_text,
-                    layout_text=ocr_text,
-                    ocr_confidence=result.confidence,
-                )
-            ],
-            page_count=1,
-            ocr_required=True,
-            ocr_confidence=result.confidence,
+        chunks = self.chunking_service.chunk_markdown(
+            converted_markdown,
+            markdown_path=markdown_path,
+            metadata={
+                "page_start": 1,
+                "page_end": 1,
+                "image_ids": [str(image_model.id)],
+            },
         )
-        chunks = self.chunking_service.chunk_image_ocr_text(
-            parsed.text,
-            image_model,
-            start_index=0,
-        )
-        chunks.extend(self.chunking_service.chunk_images([image_model], start_index=len(chunks)))
         if not chunks:
             raise APIError(ErrorCode.INVALID_REQUEST, "Image did not produce any chunks.", 400)
 
@@ -545,6 +564,33 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(document)
+
+    async def _save_markdown_artifact(self, document: Document, markdown: str) -> str:
+        filename = f"{Path(document.filename).stem}.md"
+        markdown_path = await self.storage.save_markdown(filename, markdown)
+        document.markdown_path = markdown_path
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
+        return markdown_path
+
+    def _append_image_markdown(
+        self,
+        markdown: str,
+        images: list[DocumentImage],
+    ) -> str:
+        image_sections: list[str] = []
+        for index, image in enumerate(images, start=1):
+            details = [f"### Image {index} (page {image.page_number})"]
+            if image.caption:
+                details.append(f"**Caption:** {image.caption}")
+            if image.ocr_text:
+                details.append(f"**OCR text:**\n\n{image.ocr_text}")
+            if len(details) > 1:
+                image_sections.append("\n\n".join(details))
+        if not image_sections:
+            return markdown
+        parts = [markdown.strip(), "## Extracted images", *image_sections]
+        return "\n\n".join(part for part in parts if part).rstrip() + "\n"
 
     async def _embed_chunks(self, chunks: list[TextChunk]) -> list[list[float]]:
         texts = [chunk.content for chunk in chunks]

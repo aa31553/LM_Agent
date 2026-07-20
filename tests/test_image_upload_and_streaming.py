@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -13,6 +14,7 @@ from app.models.document_chunk import DocumentChunk
 from app.models.document_image import DocumentImage
 from app.models.knowledge_base import KnowledgeBase
 from app.services.document_ingestion_service import DocumentIngestionService
+from app.services.markdown_conversion_service import MarkdownConversionService
 from app.storage.local_storage import LocalStorage
 
 
@@ -29,6 +31,15 @@ class FakeOCRService:
 class FakeEmbeddingService:
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [[0.0] * 1024 for _text in texts]
+
+
+class FakeMarkItDown:
+    def __init__(self) -> None:
+        self.converted_paths: list[str] = []
+
+    def convert_local(self, file_path):
+        self.converted_paths.append(str(file_path))
+        return type("ConversionResult", (), {"text_content": "Image metadata"})()
 
 
 def _create_kb() -> KnowledgeBase:
@@ -60,11 +71,13 @@ async def test_direct_image_upload_creates_ocr_and_image_chunks(tmp_path) -> Non
     document_id = None
     try:
         with SessionLocal() as db:
+            fake_markitdown = FakeMarkItDown()
             service = DocumentIngestionService(
                 db=db,
                 storage=LocalStorage(str(tmp_path / "uploads")),
                 ocr_service=FakeOCRService(),
                 embedding_service=FakeEmbeddingService(),
+                markdown_converter=MarkdownConversionService(fake_markitdown),
             )
             document = await service.ingest_file_path(
                 image_path,
@@ -78,7 +91,14 @@ async def test_direct_image_upload_creates_ocr_and_image_chunks(tmp_path) -> Non
             assert document.file_type == "png"
             assert document.ocr_required is True
             assert document.ocr_confidence == 0.93
-            assert document.chunk_count == 2
+            assert document.chunk_count == 1
+            assert Path(document.file_path).parent.name == "originals"
+            assert document.markdown_path is not None
+            assert Path(document.markdown_path).parent.name == "markdown"
+            assert "direct image upload OCR text" in Path(document.markdown_path).read_text(
+                encoding="utf-8"
+            )
+            assert fake_markitdown.converted_paths == [document.file_path]
             source_types = {
                 row[0]
                 for row in db.execute(
@@ -86,7 +106,7 @@ async def test_direct_image_upload_creates_ocr_and_image_chunks(tmp_path) -> Non
                     {"id": str(document.id)},
                 )
             }
-            assert source_types == {"image_ocr", "pdf_image"}
+            assert source_types == {"markdown"}
             image_count = db.execute(
                 text("select count(*) from document_images where document_id=:id"),
                 {"id": str(document.id)},

@@ -42,16 +42,15 @@ class ImageContextService:
         used_chars = 0
         for index, image in enumerate(images[:max_images], start=1):
             lines = [
-                f"[Image {index}]",
-                f"Image ID: {image.id}",
-                f"Document ID: {image.document_id}",
-                f"Page: {image.page_number}",
-                f"Path: {image.image_path}",
+                f"### Image {index}",
+                f"- Image ID: `{image.id}`",
+                f"- Document ID: `{image.document_id}`",
+                f"- Page: {image.page_number}",
             ]
             if image.caption:
-                lines.append(f"Caption: {image.caption}")
+                lines.append(f"- Caption: {image.caption}")
             if image.ocr_text:
-                lines.append(f"OCR text: {image.ocr_text}")
+                lines.extend(["", "**OCR text:**", "", image.ocr_text])
             section = "\n".join(lines)
             remaining_chars = max_chars - used_chars
             if remaining_chars <= 0:

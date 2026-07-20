@@ -1,11 +1,22 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin, audit, chat, documents, health, knowledge_bases, llmwiki, permissions
+from app.api.v1 import (
+    admin,
+    audit,
+    chat,
+    documents,
+    health,
+    knowledge_bases,
+    llmwiki,
+    permissions,
+    skills,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router, prefix="/health", tags=["health"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
+api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(
     knowledge_bases.router,
     prefix="/knowledge-bases",

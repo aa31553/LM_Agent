@@ -17,6 +17,7 @@ class Document(Base):
     title: Mapped[str | None] = mapped_column(Text)
     file_type: Mapped[str] = mapped_column(String(64), nullable=False)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    markdown_path: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(String(64), default="manual_upload")
     language: Mapped[str | None] = mapped_column(String(16))
     confidential_level: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -45,4 +46,3 @@ class DocumentProcessingJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-

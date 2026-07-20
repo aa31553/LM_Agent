@@ -35,3 +35,19 @@ class KnowledgeBasePermissionResponse(KnowledgeBasePermissionCreate):
 class KnowledgeBasePermissionsResponse(BaseModel):
     knowledge_base_id: UUID
     permissions: list[KnowledgeBasePermissionResponse]
+
+
+class SkillPermissionCreate(BaseModel):
+    subject_type: PermissionSubjectType
+    subject_value: str
+    permission: PermissionLevel = PermissionLevel.READ
+
+
+class SkillPermissionResponse(SkillPermissionCreate):
+    permission_id: UUID
+    skill_name: str
+
+
+class SkillPermissionsResponse(BaseModel):
+    skill_name: str
+    permissions: list[SkillPermissionResponse]

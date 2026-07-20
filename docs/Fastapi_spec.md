@@ -501,7 +501,32 @@ Response:
 
 ---
 
-## 10. Error Response 格式
+## 10. Skills API
+
+```http
+GET    /api/v1/skills
+POST   /api/v1/skills
+GET    /api/v1/skills/{name}
+PATCH  /api/v1/skills/{name}
+DELETE /api/v1/skills/{name}
+POST   /api/v1/skills/{name}/files
+GET    /api/v1/skills/{name}/files/{file_path}
+DELETE /api/v1/skills/{name}/files/{file_path}
+GET    /api/v1/permissions/skills/{name}
+POST   /api/v1/permissions/skills/{name}
+DELETE /api/v1/permissions/skills/{name}/{permission_id}
+```
+
+Skill access rules support `user`, `department`, and `role` subjects with `read` or `admin`
+permission. No rules means open authenticated access; one or more rules changes the Skill to an
+allow list. Unauthorized Skills are omitted from lists and LLM prompt resolution, while direct
+metadata and raw-file requests return `403`. Skill and permission mutations require the `admin`
+role. Each file record contains an authenticated `raw_url` for inline frontend preview. System
+Skills cannot be deleted, and `SKILL.md` must be changed through the Skill update endpoint.
+
+---
+
+## 11. Error Response 格式
 
 所有錯誤統一格式：
 

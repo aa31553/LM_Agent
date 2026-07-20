@@ -102,6 +102,7 @@ CREATE TABLE documents (
     title TEXT,
     file_type TEXT NOT NULL,
     file_path TEXT NOT NULL,
+    markdown_path TEXT,
     source_type TEXT DEFAULT 'manual_upload',
     language TEXT,
     confidential_level TEXT NOT NULL,

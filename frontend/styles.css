@@ -324,6 +324,7 @@ tr:last-child td {
 
 .status.ok,
 .status.ready,
+.status.enabled,
 .status.low {
   background: #e7f8ef;
   color: var(--ok);
@@ -337,6 +338,7 @@ tr:last-child td {
 }
 
 .status.degraded,
+.status.disabled,
 .status.medium,
 .status.archived {
   background: #fff4e5;
@@ -366,6 +368,26 @@ tr:last-child td {
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+.compact-output {
+  min-height: 90px;
+  max-height: 220px;
+}
+
+.skill-preview {
+  min-height: 360px;
+  max-height: 620px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.skill-preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 6px;
 }
 
 .answer {
