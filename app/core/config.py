@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: float = Field(default=2.0, gt=0)
     worker_job_timeout_seconds: int = Field(default=300, ge=1)
     worker_retry_attempts: int = Field(default=2, ge=1)
+    embedded_document_worker_enabled: bool = True
 
 
 @lru_cache
