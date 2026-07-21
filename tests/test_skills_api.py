@@ -13,6 +13,21 @@ def _headers(token: str = "admin") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "X-Request-ID": "skill-test"}
 
 
+def test_skill_file_resolution_supports_a_relative_windows_style_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    service = SkillService(Path("data") / "skills")
+
+    record = service.resolve_file("skill-creator", "SKILL.md")
+
+    assert record.relative_path == "SKILL.md"
+    assert record.path.is_absolute()
+    assert record.path.is_file()
+    assert record.path.parent == (tmp_path / "data" / "skills" / "skill-creator").resolve()
+
+
 def test_default_skills_and_progressive_context(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "skills"
     monkeypatch.setattr(settings, "skills_root", str(root))

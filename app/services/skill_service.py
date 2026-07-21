@@ -79,7 +79,7 @@ class ResolvedSkillContext:
 
 class SkillService:
     def __init__(self, root: str | Path | None = None) -> None:
-        self.root = Path(root or settings.skills_root)
+        self.root = Path(root or settings.skills_root).resolve()
         self.defaults_root = Path(__file__).resolve().parents[1] / "default_skills"
 
     def ensure_defaults(self) -> None:
@@ -468,13 +468,15 @@ class SkillService:
         return target
 
     def _file_record(self, directory: Path, path: Path) -> SkillFileRecord:
-        relative_path = path.relative_to(directory).as_posix()
-        mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        is_text = mime_type.startswith("text/") or path.suffix.lower() in TEXT_SUFFIXES
+        resolved_directory = directory.resolve()
+        resolved_path = path.resolve()
+        relative_path = resolved_path.relative_to(resolved_directory).as_posix()
+        mime_type = mimetypes.guess_type(resolved_path.name)[0] or "application/octet-stream"
+        is_text = mime_type.startswith("text/") or resolved_path.suffix.lower() in TEXT_SUFFIXES
         return SkillFileRecord(
             relative_path=relative_path,
-            path=path,
-            size=path.stat().st_size,
+            path=resolved_path,
+            size=resolved_path.stat().st_size,
             mime_type=mime_type,
             is_text=is_text,
         )

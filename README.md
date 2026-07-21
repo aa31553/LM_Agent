@@ -117,6 +117,12 @@ API docs will be available at:
 - `http://127.0.0.1:8000/docs`
 - `http://127.0.0.1:8000/redoc`
 
+Both documentation pages are fully local. Swagger UI and ReDoc JavaScript,
+CSS, favicon, OAuth redirect, and OpenAPI schema are served by the FastAPI
+application under `/docs-assets` without CDN or Google Fonts access. Large
+JavaScript and CSS assets are bundled as precompressed gzip package data and
+decompressed automatically by the browser.
+
 ## Goals
 
 The MVP focuses on turning internal PDF and image documents into a searchable,
