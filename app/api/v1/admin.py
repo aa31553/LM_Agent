@@ -1,3 +1,4 @@
+import math
 import time
 from uuid import UUID
 
@@ -9,8 +10,12 @@ from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
+from app.integrations.embedding_client import EmbeddingClient
 from app.integrations.openai_compatible_client import build_api_url
 from app.schemas.admin import (
+    EmbeddingStatusResponse,
+    EmbeddingTestRequest,
+    EmbeddingTestResponse,
     LLMTestRequest,
     LLMTestResponse,
     OperationMetricsResponse,
@@ -20,6 +25,7 @@ from app.schemas.admin import (
     SensitiveRuleResponse,
     SensitiveRuleStatusRequest,
 )
+from app.services.embedding_service import EmbeddingService
 from app.services.operation_monitoring_service import OperationMonitoringService
 from app.services.retention_service import RetentionService
 from app.services.sensitive_dictionary_service import SensitiveDictionaryService
@@ -54,6 +60,42 @@ async def test_llm_connection(
         endpoint=build_api_url(settings.llm_base_url, settings.llm_api_path),
         latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
         answer=answer,
+    )
+
+
+@router.get("/embedding/status", response_model=EmbeddingStatusResponse)
+async def embedding_status(
+    principal: Principal = Depends(get_current_principal),
+) -> EmbeddingStatusResponse:
+    _ensure_admin(principal)
+    service_status = await EmbeddingClient().status()
+    return EmbeddingStatusResponse(
+        status=str(service_status.get("status", "unknown")),
+        endpoint=settings.embedding_endpoint,
+        configured_model=settings.embedding_model,
+        configured_dimension=settings.embedding_dimension,
+        service=service_status,
+    )
+
+
+@router.post("/embedding/test", response_model=EmbeddingTestResponse)
+async def test_embedding_connection(
+    payload: EmbeddingTestRequest,
+    principal: Principal = Depends(get_current_principal),
+) -> EmbeddingTestResponse:
+    _ensure_admin(principal)
+    started_at = time.perf_counter()
+    vectors = await EmbeddingService().embed_texts([payload.text])
+    vector = vectors[0]
+    return EmbeddingTestResponse(
+        status="ok",
+        model=settings.embedding_model,
+        endpoint=settings.embedding_endpoint,
+        configured_dimension=settings.embedding_dimension,
+        actual_dimension=len(vector),
+        latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        vector_norm=round(math.sqrt(sum(value * value for value in vector)), 6),
+        vector_preview=[round(value, 6) for value in vector[:8]],
     )
 
 

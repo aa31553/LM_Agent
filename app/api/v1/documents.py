@@ -13,6 +13,8 @@ from app.schemas.common import PageResponse
 from app.schemas.document import (
     DocumentArchiveResponse,
     DocumentDetail,
+    DocumentFormatItem,
+    DocumentFormatsResponse,
     DocumentListItem,
     DocumentStatusResponse,
     DocumentUploadResponse,
@@ -21,6 +23,7 @@ from app.schemas.document import (
 from app.services.document_ingestion_service import DocumentIngestionService
 from app.services.permission_service import PermissionService
 from app.services.processing_queue_service import ProcessingQueueService
+from app.utils.file_utils import supported_upload_formats
 
 router = APIRouter()
 
@@ -50,6 +53,18 @@ async def upload_document(
         version=version,
         request_id=request_id,
         principal=principal,
+    )
+
+
+@router.get("/formats", response_model=DocumentFormatsResponse)
+async def list_document_formats(
+    principal: Principal = Depends(get_current_principal),
+) -> DocumentFormatsResponse:
+    del principal
+    formats = supported_upload_formats()
+    return DocumentFormatsResponse(
+        items=[DocumentFormatItem(**item) for item in formats],
+        accept=",".join(item["extension"] for item in formats),
     )
 
 

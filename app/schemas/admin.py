@@ -47,6 +47,33 @@ class LLMTestResponse(BaseModel):
     answer: str
 
 
+class EmbeddingTestRequest(BaseModel):
+    text: str = Field(
+        default="LM Agent embedding connectivity test.",
+        min_length=1,
+        max_length=20_000,
+    )
+
+
+class EmbeddingTestResponse(BaseModel):
+    status: str
+    model: str
+    endpoint: str
+    configured_dimension: int
+    actual_dimension: int
+    latency_ms: float
+    vector_norm: float
+    vector_preview: list[float]
+
+
+class EmbeddingStatusResponse(BaseModel):
+    status: str
+    endpoint: str
+    configured_model: str
+    configured_dimension: int
+    service: dict[str, object]
+
+
 class SensitiveRuleRequest(BaseModel):
     entity_type: str = Field(min_length=1, max_length=64)
     value: str = Field(min_length=1)

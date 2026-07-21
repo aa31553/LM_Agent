@@ -83,6 +83,33 @@ Response:
 
 ## 5. Document API
 
+### 5.0 查詢支援格式
+
+```http
+GET /api/v1/documents/formats
+Authorization: Bearer <token>
+```
+
+Response 中的 `items` 是唯一格式清單來源，前端使用 `accept` 設定檔案選擇器：
+
+```json
+{
+  "items": [
+    {"extension": ".pdf", "file_type": "pdf", "category": "pdf"},
+    {"extension": ".docx", "file_type": "docx", "category": "office"},
+    {"extension": ".md", "file_type": "md", "category": "text"},
+    {"extension": ".json", "file_type": "json", "category": "structured"}
+  ],
+  "accept": ".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,.docx,.xlsx,.pptx,.txt,.md,.markdown,.log,.csv,.json,.yaml,.yml,.html,.htm,.xml"
+}
+```
+
+新增格式的位置為 `app/utils/file_utils.py::UPLOAD_TYPE_GROUPS`；新類別還必須在
+`DocumentIngestionService._process_document()` 註冊對應 parser。文字與結構化格式由
+`app/services/text_document_parser_service.py` 處理。
+
+---
+
 ### 5.1 上傳文件
 
 ```http
@@ -99,7 +126,7 @@ Request fields:
 
 | 欄位                 | 型別     | 必填 | 說明                           |
 | ------------------ | ------ | -- | ---------------------------- |
-| file               | file   | 是  | PDF、圖片、DOCX、XLSX 或 PPTX     |
+| file               | file   | 是  | 以 `GET /documents/formats` 回傳清單為準 |
 | scope              | string | 否  | `knowledge_base`（預設）或 `session` |
 | knowledge_base_id  | UUID   | 條件式 | `scope=knowledge_base` 時必填      |
 | session_id         | UUID   | 否  | `scope=session` 時可填；省略則建立新 Session |
@@ -581,6 +608,26 @@ allow list. Unauthorized Skills are omitted from lists and LLM prompt resolution
 metadata and raw-file requests return `403`. Skill and permission mutations require the `admin`
 role. Each file record contains an authenticated `raw_url` for inline frontend preview. System
 Skills cannot be deleted, and `SKILL.md` must be changed through the Skill update endpoint.
+
+---
+
+## 10.1 Embedding Service 管理 API
+
+```http
+GET /api/v1/admin/embedding/status
+POST /api/v1/admin/embedding/test
+Authorization: Bearer <admin-token>
+```
+
+狀態端點代理獨立服務的 `GET /status`，回傳模型載入狀態、device、維度、port、
+請求量、錯誤量及延遲。測試端點請求：
+
+```json
+{"text": "AOI defect inspection / 自動光學檢測"}
+```
+
+回應包含 `configured_dimension`、`actual_dimension`、`latency_ms`、
+`vector_norm` 與前 8 個向量值。兩個端點都不建立資料庫 Session。
 
 ---
 

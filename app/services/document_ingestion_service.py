@@ -35,8 +35,14 @@ from app.services.office_parser_service import OfficeParserService
 from app.services.pdf_parser_service import PDFParserService
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
 from app.services.processing_queue_service import ProcessingQueueService
+from app.services.text_document_parser_service import TextDocumentParserService
 from app.storage.local_storage import LocalStorage
-from app.utils.file_utils import SUPPORTED_UPLOAD_TYPES, infer_file_type, is_supported_upload
+from app.utils.file_utils import (
+    SUPPORTED_UPLOAD_TYPES,
+    infer_file_type,
+    is_supported_upload,
+    upload_type_category,
+)
 from app.utils.language_detector import detect_language
 from app.utils.text_utils import clean_db_text
 
@@ -56,6 +62,7 @@ class DocumentIngestionService:
         image_extraction_service: PDFImageExtractionService | None = None,
         office_parser: OfficeParserService | None = None,
         markdown_converter: MarkdownConversionService | None = None,
+        text_parser: TextDocumentParserService | None = None,
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
@@ -66,6 +73,7 @@ class DocumentIngestionService:
         self.image_extraction_service = image_extraction_service or PDFImageExtractionService()
         self.office_parser = office_parser or OfficeParserService()
         self.markdown_converter = markdown_converter or MarkdownConversionService()
+        self.text_parser = text_parser or TextDocumentParserService()
 
     async def queue_upload(
         self,
@@ -85,7 +93,7 @@ class DocumentIngestionService:
         if not file.filename or not is_supported_upload(file.filename):
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
-                "Unsupported document type. Supported uploads are PDF, images, DOCX, XLSX, and PPTX.",
+                "Unsupported document type. Call GET /api/v1/documents/formats for the supported extensions.",
                 400,
             )
 
@@ -202,7 +210,7 @@ class DocumentIngestionService:
         if file_type not in SUPPORTED_UPLOAD_TYPES:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
-                "Unsupported document type. Supported uploads are PDF, images, DOCX, XLSX, and PPTX.",
+                "Unsupported document type. Call GET /api/v1/documents/formats for the supported extensions.",
                 400,
             )
 
@@ -328,13 +336,24 @@ class DocumentIngestionService:
         )
 
     async def _process_document(self, document: Document) -> None:
-        if document.file_type == "pdf":
+        category = upload_type_category(document.file_type)
+        if category == "pdf":
             await self._process_pdf_document(document)
             return
-        if document.file_type in OfficeParserService.supported_types:
+        if category == "office":
             await self._process_office_document(document)
             return
-        await self._process_image_document(document)
+        if category in {"text", "structured"}:
+            await self._process_text_document(document)
+            return
+        if category == "image":
+            await self._process_image_document(document)
+            return
+        raise APIError(
+            ErrorCode.INVALID_REQUEST,
+            f"Unsupported document type: .{document.file_type}",
+            400,
+        )
 
     async def _process_with_failure_capture(
         self,
@@ -489,6 +508,56 @@ class DocumentIngestionService:
         )
         if not chunks:
             raise APIError(ErrorCode.INVALID_REQUEST, "Office document did not produce any chunks.", 400)
+
+        document.status = DocumentStatus.EMBEDDING.value
+        self.db.commit()
+        embeddings = await self._embed_chunks(chunks)
+
+        document.status = DocumentStatus.INDEXING.value
+        self.db.commit()
+        chunk_models = [
+            self._chunk_model(document, text_chunk, embedding)
+            for text_chunk, embedding in zip(chunks, embeddings, strict=True)
+        ]
+        ChunkRepository(self.db).add_many(chunk_models)
+        self.db.flush()
+        document.chunk_count = len(chunk_models)
+        document.status = DocumentStatus.READY.value
+        document.error_message = None
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(document)
+
+    async def _process_text_document(self, document: Document) -> None:
+        document.status = DocumentStatus.PARSING.value
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
+
+        parsed = await self.text_parser.parse(
+            document.file_path,
+            file_type=document.file_type,
+        )
+        converted_markdown = parsed.markdown
+        document.page_count = parsed.page_count
+        document.ocr_required = False
+        document.ocr_confidence = None
+
+        markdown_path = await self._save_markdown_artifact(document, converted_markdown)
+        document.status = DocumentStatus.CHUNKING.value
+        document.language = detect_language(parsed.text)
+        self.db.commit()
+
+        chunks = self.chunking_service.chunk_markdown(
+            converted_markdown,
+            markdown_path=markdown_path,
+            metadata={"source_type": f"{document.file_type}_text"},
+        )
+        if not chunks:
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "Text document did not produce any chunks.",
+                400,
+            )
 
         document.status = DocumentStatus.EMBEDDING.value
         self.db.commit()

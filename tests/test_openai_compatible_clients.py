@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from app.core.config import settings
+from app.core.exceptions import APIError
 from app.integrations.embedding_client import EmbeddingClient
 from app.integrations.openai_compatible_client import OpenAICompatibleClient, build_api_url
 
@@ -73,7 +74,7 @@ async def test_embedding_client_uses_local_openai_compatible_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedding_client_truncates_oversized_vectors() -> None:
+async def test_embedding_client_rejects_mismatched_vector_dimension() -> None:
     oversized = [float(index) for index in range(settings.embedding_dimension + 4)]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -88,10 +89,14 @@ async def test_embedding_client_truncates_oversized_vectors() -> None:
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        vectors = await EmbeddingClient(http_client=http_client).embed(["hello"])
+        with pytest.raises(APIError) as exc_info:
+            await EmbeddingClient(http_client=http_client).embed(["hello"])
 
-    assert len(vectors[0]) == settings.embedding_dimension
-    assert vectors[0] == oversized[: settings.embedding_dimension]
+    assert exc_info.value.error_code == "EMBEDDING_SERVICE_ERROR"
+    assert exc_info.value.details == {
+        "expected": settings.embedding_dimension,
+        "actual": settings.embedding_dimension + 4,
+    }
 
 
 @pytest.mark.asyncio

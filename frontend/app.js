@@ -18,6 +18,7 @@ const state = {
   sessionId: localStorage.getItem("lmAgentSessionId") || "",
   knowledgeBases: [],
   documents: [],
+  documentFormats: [],
   skills: [],
   selectedSkillName: localStorage.getItem("lmAgentSkillName") || "",
   llmwikiPage: null,
@@ -71,6 +72,7 @@ async function loadStartupData() {
   await Promise.allSettled([
     refreshKnowledgeBases(),
     refreshDocuments(),
+    refreshDocumentFormats(),
     refreshSkills(),
     refreshOverview(),
   ]);
@@ -769,7 +771,7 @@ function renderDocuments() {
           <button class="primary" id="uploadDocBtn">上傳</button>
         </div>
         <div class="form-grid">
-          <label class="wide">檔案<input id="uploadFile" type="file" /></label>
+          <label class="wide">檔案<input id="uploadFile" type="file" /><small id="uploadFormatsHint" class="muted">正在載入支援格式…</small></label>
           <label>使用範圍<select id="uploadScope"><option value="knowledge_base">加入知識庫</option><option value="session">僅此 Session</option></select></label>
           <label class="wide">知識庫<select id="uploadKbId"></select></label>
           <label class="wide">Session ID（留空將自動建立）<input id="uploadSessionId" /></label>
@@ -841,6 +843,28 @@ function renderDocuments() {
   renderDocumentTable();
 }
 
+async function refreshDocumentFormats() {
+  try {
+    const payload = await api("/documents/formats");
+    state.documentFormats = payload.items || [];
+    const input = $("#uploadFile");
+    if (input) input.accept = payload.accept || "";
+    const hint = $("#uploadFormatsHint");
+    if (hint) {
+      const grouped = state.documentFormats.reduce((result, item) => {
+        (result[item.category] ||= []).push(item.extension);
+        return result;
+      }, {});
+      hint.textContent = Object.entries(grouped)
+        .map(([category, extensions]) => `${category}: ${extensions.join(", ")}`)
+        .join(" ｜ ");
+    }
+  } catch (error) {
+    const hint = $("#uploadFormatsHint");
+    if (hint) hint.textContent = `無法取得格式清單：${error.message}`;
+  }
+}
+
 function updateUploadScopeFields() {
   const sessionScope = $("#uploadScope")?.value === "session";
   if ($("#uploadKbId")) $("#uploadKbId").disabled = sessionScope;
@@ -866,6 +890,12 @@ async function uploadDocument() {
   try {
     const file = $("#uploadFile").files[0];
     if (!file) throw new Error("請選擇檔案");
+    if (state.documentFormats.length) {
+      const extension = `.${file.name.split(".").pop().toLowerCase()}`;
+      if (!state.documentFormats.some((item) => item.extension === extension)) {
+        throw new Error(`不支援的文件格式：${extension}`);
+      }
+    }
     const scope = $("#uploadScope").value;
     const kbId = $("#uploadKbId").value || state.selectedKbId;
     if (scope === "knowledge_base" && !kbId) throw new Error("請先選擇知識庫");
@@ -1575,6 +1605,20 @@ function renderAdmin() {
       </div>
       <div class="panel">
         <div class="panel-header">
+          <h2>Embedding Service</h2>
+          <div class="actions">
+            <button id="embeddingStatusBtn">讀取狀態</button>
+            <button class="primary" id="embeddingTestBtn">測試向量</button>
+          </div>
+        </div>
+        <p class="muted">觀測獨立模型服務的狀態、裝置、維度、請求量與延遲。</p>
+        <div class="form-grid">
+          <label class="full">測試文字<textarea id="embeddingTestText">AOI defect inspection / 自動光學檢測</textarea></label>
+        </div>
+        <div id="embeddingOutput" class="output compact-output"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
           <h2>稽核</h2>
           <div class="actions">
             <button data-audit="/audit/chat-logs">Chat</button>
@@ -1604,6 +1648,8 @@ function renderAdmin() {
   $("#retentionPreviewBtn").addEventListener("click", () => runRetention(false));
   $("#retentionApplyBtn").addEventListener("click", () => runRetention(true));
   $("#llmTestBtn").addEventListener("click", testLLMConnection);
+  $("#embeddingStatusBtn").addEventListener("click", loadEmbeddingStatus);
+  $("#embeddingTestBtn").addEventListener("click", testEmbeddingConnection);
   $$("#admin [data-audit]").forEach((button) => button.addEventListener("click", () => loadAudit(button.dataset.audit)));
 }
 
@@ -1671,6 +1717,33 @@ async function testLLMConnection() {
   } finally {
     button.disabled = false;
     button.textContent = "測試連線";
+  }
+}
+
+async function loadEmbeddingStatus() {
+  try {
+    writeOutput("#embeddingOutput", await api("/admin/embedding/status"));
+  } catch (error) {
+    writeOutput("#embeddingOutput", errorPayload(error));
+  }
+}
+
+async function testEmbeddingConnection() {
+  const button = $("#embeddingTestBtn");
+  button.disabled = true;
+  button.textContent = "測試中…";
+  try {
+    const payload = await api("/admin/embedding/test", {
+      method: "POST",
+      json: { text: $("#embeddingTestText").value.trim() },
+    });
+    writeOutput("#embeddingOutput", payload);
+    showAlert(`Embedding 測試成功（${payload.actual_dimension} 維，${payload.latency_ms} ms）`, "success");
+  } catch (error) {
+    writeOutput("#embeddingOutput", errorPayload(error));
+  } finally {
+    button.disabled = false;
+    button.textContent = "測試向量";
   }
 }
 

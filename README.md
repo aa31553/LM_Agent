@@ -118,6 +118,13 @@ the URL builder avoids creating a duplicated `/v1/v1/` path. The optional
 `reasoning_effort` request field is omitted unless the internal API explicitly
 supports it and `LLM_REASONING_EFFORT` is set to a value other than `none`.
 
+An independent offline embedding server is included under
+`services/embedding_service/`. Start it on Windows with
+`services\embedding_service\start_embedding_service.bat 1234`; its Swagger UI is
+available at `http://127.0.0.1:1234/docs`. The LM Agent Admin page can read model
+readiness and metrics and run a test embedding through the authenticated backend proxy.
+See [Embedding Service administration](docs/admin/embedding_service.md).
+
 API docs will be available at:
 
 - `http://127.0.0.1:8000/docs`
@@ -136,7 +143,7 @@ permission-aware knowledge base that can answer questions with citations.
 
 Core capabilities:
 
-- Upload PDF and image documents.
+- Upload PDF, image, Office, text, and structured documents.
 - Extract text from text-based PDFs.
 - Run OCR for scanned PDFs and images.
 - Clean, chunk, embed, and index document content.
@@ -167,6 +174,7 @@ Included in the MVP:
 - DLP for query, context, and response
 - Audit logging
 - Word / Excel / PowerPoint OpenXML ingestion
+- Text and structured ingestion: TXT, Markdown, LOG, CSV, JSON, YAML, HTML, and XML
 - Bounded agent tool calling for document search and document status
 - Docker Compose deployment model
 
@@ -418,6 +426,9 @@ Important endpoints:
 - `GET /api/v1/health`
 - `GET /api/v1/health/dependencies`
 - `POST /api/v1/admin/llm/test`
+- `GET /api/v1/admin/embedding/status`
+- `POST /api/v1/admin/embedding/test`
+- `GET /api/v1/documents/formats`
 - `POST /api/v1/documents/upload`
 - `GET /api/v1/skills`
 - `POST /api/v1/skills`
@@ -679,4 +690,6 @@ This README summarizes the design documents under `docs/`:
 - `docs/Auth_spec.md`
 - `docs/admin/llmwiki.md`
 - `docs/admin/office_ingestion_and_agent_tools.md`
+- `docs/admin/embedding_service.md`
+- `docs/admin/document_formats.md`
 - `docs/admin/sensitive_data_rules.md`

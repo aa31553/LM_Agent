@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -26,9 +26,13 @@ class Settings(BaseSettings):
     tesseract_cmd: str = ""
 
     embedding_endpoint: str = "http://127.0.0.1:1234/v1/embeddings"
+    embedding_service_base_url: str = "http://127.0.0.1:1234"
     embedding_model: str = "text-embedding-mxbai-embed-large-v1"
     embedding_dimension: int = 1024
     embedding_batch_size: int = Field(default=16, ge=1)
+    embedding_api_key: str = ""
+    embedding_timeout_seconds: int = Field(default=90, ge=1)
+    embedding_ssl_verify: bool = True
 
     llm_base_url: str = "http://127.0.0.1:1234"
     llm_api_path: str = "/v1/chat/completions"

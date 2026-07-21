@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit, urlunsplit
+
 import httpx
 
 from app.core.config import settings
@@ -13,27 +15,46 @@ class EmbeddingClient:
         if not texts:
             return []
 
-        payload = {
-            "model": settings.embedding_model,
-            "input": texts,
-        }
-        headers = self._headers()
+        payload = {"model": settings.embedding_model, "input": texts}
+        body = await self._request_json("POST", settings.embedding_endpoint, json=payload)
+        vectors = self._parse_embeddings(body)
+        if len(vectors) != len(texts):
+            raise APIError(
+                ErrorCode.EMBEDDING_SERVICE_ERROR,
+                "Embedding service returned an unexpected number of vectors.",
+                status_code=502,
+                details={"expected": len(texts), "actual": len(vectors)},
+            )
+        return [self._normalize_dimension(vector) for vector in vectors]
 
+    async def status(self) -> dict[str, object]:
+        body = await self._request_json("GET", self._service_url("/status"))
+        if not isinstance(body, dict):
+            raise APIError(
+                ErrorCode.EMBEDDING_SERVICE_ERROR,
+                "Embedding service returned an invalid status response.",
+                status_code=502,
+            )
+        return body
+
+    async def _request_json(self, method: str, url: str, **kwargs) -> dict:
         try:
             if self.http_client is not None:
-                response = await self.http_client.post(
-                    settings.embedding_endpoint,
-                    json=payload,
-                    headers=headers,
-                    timeout=settings.llm_timeout_seconds,
+                response = await self.http_client.request(
+                    method,
+                    url,
+                    headers=self._headers(),
+                    timeout=settings.embedding_timeout_seconds,
+                    **kwargs,
                 )
             else:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        settings.embedding_endpoint,
-                        json=payload,
-                        headers=headers,
-                        timeout=settings.llm_timeout_seconds,
+                async with httpx.AsyncClient(verify=settings.embedding_ssl_verify) as client:
+                    response = await client.request(
+                        method,
+                        url,
+                        headers=self._headers(),
+                        timeout=settings.embedding_timeout_seconds,
+                        **kwargs,
                     )
             response.raise_for_status()
             body = response.json()
@@ -51,22 +72,34 @@ class EmbeddingClient:
                 status_code=502,
                 details={"error": str(exc)},
             ) from exc
-
-        vectors = self._parse_embeddings(body)
-        if len(vectors) != len(texts):
+        if not isinstance(body, dict):
             raise APIError(
                 ErrorCode.EMBEDDING_SERVICE_ERROR,
-                "Embedding service returned an unexpected number of vectors.",
+                "Embedding service response must be a JSON object.",
                 status_code=502,
-                details={"expected": len(texts), "actual": len(vectors)},
             )
-        return [self._normalize_dimension(vector) for vector in vectors]
+        return body
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if settings.llm_api_key:
-            headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+        if settings.embedding_api_key:
+            headers["Authorization"] = f"Bearer {settings.embedding_api_key}"
         return headers
+
+    def _service_url(self, path: str) -> str:
+        configured = settings.embedding_service_base_url.strip()
+        if configured:
+            return f"{configured.rstrip('/')}/{path.lstrip('/')}"
+
+        endpoint = urlsplit(settings.embedding_endpoint)
+        endpoint_path = endpoint.path
+        suffix = "/v1/embeddings"
+        if endpoint_path.endswith(suffix):
+            endpoint_path = endpoint_path[: -len(suffix)]
+        status_path = f"{endpoint_path.rstrip('/')}/{path.lstrip('/')}"
+        return urlunsplit(
+            (endpoint.scheme, endpoint.netloc, status_path, "", "")
+        )
 
     def _parse_embeddings(self, body: dict) -> list[list[float]]:
         data = body.get("data")
@@ -96,8 +129,6 @@ class EmbeddingClient:
         expected = settings.embedding_dimension
         if len(vector) == expected:
             return vector
-        if len(vector) > expected:
-            return vector[:expected]
         raise APIError(
             ErrorCode.EMBEDDING_SERVICE_ERROR,
             "Embedding service returned a vector with fewer dimensions than configured.",

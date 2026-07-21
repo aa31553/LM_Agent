@@ -6,6 +6,17 @@ from pydantic import BaseModel, Field
 from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus
 
 
+class DocumentFormatItem(BaseModel):
+    extension: str
+    file_type: str
+    category: str
+
+
+class DocumentFormatsResponse(BaseModel):
+    items: list[DocumentFormatItem]
+    accept: str
+
+
 class DocumentUploadResponse(BaseModel):
     request_id: str
     document_id: UUID
