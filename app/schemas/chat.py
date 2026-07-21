@@ -8,7 +8,7 @@ from app.core.constants import RiskLevel
 
 class ChatQueryRequest(BaseModel):
     session_id: UUID | None = None
-    knowledge_base_ids: list[UUID]
+    knowledge_base_ids: list[UUID] = Field(default_factory=list)
     query: str = Field(min_length=1)
     top_k: int = Field(default=8, ge=1, le=50)
     use_rerank: bool = True
@@ -69,3 +69,11 @@ class ChatMessage(BaseModel):
 class ChatSessionMessages(BaseModel):
     session_id: UUID
     messages: list[ChatMessage]
+
+
+class ChatSessionDeleteResponse(BaseModel):
+    session_id: UUID
+    deleted_documents: int
+    deleted_messages: int
+    deleted_files: int
+    status: str = "deleted"

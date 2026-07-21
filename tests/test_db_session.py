@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 
+from app.db import startup
 from app.db.session import (
     create_database_engine,
     database_backend,
@@ -83,3 +84,55 @@ def test_sqlite_options_allow_fastapi_thread_usage() -> None:
         "check_same_thread": False,
         "timeout": 7,
     }
+
+
+def test_startup_check_initializes_missing_sqlite_schema(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "startup.sqlite3"
+    engine = create_database_engine(f"sqlite:///{database_path}")
+    monkeypatch.setattr(startup, "engine", engine)
+
+    startup.ensure_database_ready()
+
+    with engine.connect() as connection:
+        table_names = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'table'")
+            )
+        }
+        document_columns = {
+            row[1]: bool(row[3])
+            for row in connection.execute(text("PRAGMA table_info(documents)"))
+        }
+    assert {"documents", "document_chunks", "chat_sessions"}.issubset(table_names)
+    assert document_columns["session_id"] is False
+    assert document_columns["knowledge_base_id"] is False
+    engine.dispose()
+
+
+def test_startup_check_upgrades_legacy_sqlite_document_scope(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "legacy.sqlite3"
+    engine = create_database_engine(f"sqlite:///{database_path}")
+    monkeypatch.setattr(startup, "engine", engine)
+    startup.ensure_database_ready()
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.exec_driver_sql("DROP TABLE documents")
+        connection.exec_driver_sql(
+            "CREATE TABLE documents ("
+            "id CHAR(32) PRIMARY KEY, "
+            "knowledge_base_id CHAR(32) NOT NULL"
+            ")"
+        )
+
+    startup.ensure_database_ready()
+
+    with engine.connect() as connection:
+        document_columns = {
+            row[1]: bool(row[3])
+            for row in connection.execute(text("PRAGMA table_info(documents)"))
+        }
+    assert document_columns["session_id"] is False
+    assert document_columns["knowledge_base_id"] is False
+    assert "filename" in document_columns
+    engine.dispose()

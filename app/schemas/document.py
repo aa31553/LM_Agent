@@ -3,13 +3,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.core.constants import ConfidentialLevel, DocumentStatus
+from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus
 
 
 class DocumentUploadResponse(BaseModel):
     request_id: str
     document_id: UUID
     status: DocumentStatus
+    scope: DocumentScope
+    knowledge_base_id: UUID | None = None
+    session_id: UUID | None = None
     message: str
 
 
@@ -19,7 +22,9 @@ class DocumentListItem(BaseModel):
     title: str | None = None
     status: DocumentStatus
     confidential_level: ConfidentialLevel
-    knowledge_base_id: UUID
+    scope: DocumentScope
+    knowledge_base_id: UUID | None = None
+    session_id: UUID | None = None
     department: str | None = None
     page_count: int | None = None
     chunk_count: int = 0
@@ -40,7 +45,9 @@ class DocumentDetail(BaseModel):
     document_id: UUID
     filename: str
     title: str | None = None
-    knowledge_base_id: UUID
+    scope: DocumentScope
+    knowledge_base_id: UUID | None = None
+    session_id: UUID | None = None
     language: str | None = None
     confidential_level: ConfidentialLevel
     department: str | None = None

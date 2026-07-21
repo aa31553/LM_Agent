@@ -90,6 +90,7 @@ class RAGService:
             top_k=self._retrieval_candidate_top_k(requested_top_k),
             use_rerank=payload.use_rerank,
             principal=principal,
+            session_id=session.id,
         )
         wants_images = self._query_wants_images(processed_query)
         chunks = self._filter_image_chunks_for_query(chunks, wants_images)[:requested_top_k]
@@ -351,6 +352,7 @@ class RAGService:
             top_k=self._retrieval_candidate_top_k(requested_top_k),
             use_rerank=payload.use_rerank,
             principal=principal,
+            session_id=session.id,
         )
         wants_images = self._query_wants_images(processed_query)
         chunks = self._filter_image_chunks_for_query(chunks, wants_images)[:requested_top_k]

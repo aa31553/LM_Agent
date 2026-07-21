@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.constants import ConfidentialLevel, DocumentStatus, ErrorCode
+from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
@@ -28,7 +28,9 @@ router = APIRouter()
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    knowledge_base_id: UUID = Form(...),
+    scope: DocumentScope = Form(default=DocumentScope.KNOWLEDGE_BASE),
+    knowledge_base_id: UUID | None = Form(default=None),
+    session_id: UUID | None = Form(default=None),
     confidential_level: ConfidentialLevel = Form(...),
     department: str | None = Form(default=None),
     document_type: str | None = Form(default=None),
@@ -39,7 +41,9 @@ async def upload_document(
 ) -> DocumentUploadResponse:
     return await DocumentIngestionService(db=db).queue_upload(
         file=file,
+        scope=scope,
         knowledge_base_id=knowledge_base_id,
+        session_id=session_id,
         confidential_level=confidential_level,
         department=department,
         document_type=document_type,

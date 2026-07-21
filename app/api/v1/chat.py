@@ -10,10 +10,16 @@ from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
 from app.models.chat import ChatSession
-from app.schemas.chat import ChatQueryRequest, ChatQueryResponse, ChatSessionMessages
+from app.schemas.chat import (
+    ChatQueryRequest,
+    ChatQueryResponse,
+    ChatSessionDeleteResponse,
+    ChatSessionMessages,
+)
 from app.schemas.chat import ChatMessage as ChatMessageSchema
 from app.services.audit_service import AuditService
 from app.services.rag_service import RAGService
+from app.services.session_service import SessionService
 
 router = APIRouter()
 
@@ -53,6 +59,15 @@ def _sse_event(event: dict) -> str:
     if response is not None and hasattr(response, "model_dump"):
         payload["response"] = response.model_dump(mode="json")
     return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.delete("/sessions/{session_id}", response_model=ChatSessionDeleteResponse)
+async def delete_session(
+    session_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ChatSessionDeleteResponse:
+    return SessionService(db).delete(session_id, principal)
 
 
 @router.get("/sessions/{session_id}/messages", response_model=ChatSessionMessages)

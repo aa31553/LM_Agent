@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
 
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID REFERENCES knowledge_bases(id),
+    session_id UUID,
     filename TEXT NOT NULL,
     original_filename TEXT,
     title TEXT,
@@ -67,7 +68,7 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS document_chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID REFERENCES knowledge_bases(id),
     chunk_index INT NOT NULL,
     content TEXT NOT NULL,
     masked_content TEXT,
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 CREATE TABLE IF NOT EXISTS document_images (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID REFERENCES knowledge_bases(id),
     chunk_id UUID REFERENCES document_chunks(id),
     page_number INT NOT NULL,
     image_index INT NOT NULL,

@@ -12,6 +12,7 @@ from app.core.constants import (
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.models.document import Document
+from app.models.chat import ChatSession
 from app.models.knowledge_base import KnowledgeBase
 from app.models.permission import DocumentPermission, KnowledgeBasePermission
 from app.repositories.permission_repository import (
@@ -19,6 +20,7 @@ from app.repositories.permission_repository import (
     KnowledgeBasePermissionRepository,
 )
 from app.services.audit_service import AuditService
+from app.repositories.user_repository import UserRepository
 
 
 class PermissionService:
@@ -43,12 +45,20 @@ class PermissionService:
             return True
         if document.status == "archived":
             return False
+        if document.session_id is not None:
+            if self.db is None:
+                return False
+            user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
+            session = self.db.get(ChatSession, document.session_id)
+            return user is not None and session is not None and session.user_id == user.id
         if not self.can_access_level(principal, ConfidentialLevel(document.confidential_level)):
             return False
         if document.department and principal.department == document.department:
             return True
         if self.db is None:
             return True
+        if document.knowledge_base_id is None:
+            return False
         if not self._kb_permissions_allow(principal, document.knowledge_base_id):
             return False
         document_permissions = DocumentPermissionRepository(self.db).list_for_document(document.id)

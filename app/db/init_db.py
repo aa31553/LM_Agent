@@ -11,7 +11,14 @@ def _migration_sql_paths() -> list[Path]:
 def init_db() -> None:
     from sqlalchemy import text
 
-    from app.db.session import engine
+    from app.db.session import database_backend, engine
+
+    if database_backend(str(engine.url)) == "sqlite":
+        from app.db.base import Base
+        import app.models  # noqa: F401
+
+        Base.metadata.create_all(bind=engine)
+        return
 
     try:
         with engine.begin() as connection:

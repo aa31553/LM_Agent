@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
+from app.db.startup import ensure_database_ready
 
 DOCS_ASSETS_DIR = Path(__file__).resolve().parent / "static" / "docs"
 DOCS_ASSETS_URL = "/docs-assets"
@@ -36,11 +38,18 @@ class LocalDocsStaticFiles(StaticFiles):
 
 def create_app() -> FastAPI:
     configure_logging()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        ensure_database_ready()
+        yield
+
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         docs_url=None,
         redoc_url=None,
+        lifespan=lifespan,
     )
     app.mount(
         DOCS_ASSETS_URL,

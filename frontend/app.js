@@ -770,7 +770,9 @@ function renderDocuments() {
         </div>
         <div class="form-grid">
           <label class="wide">檔案<input id="uploadFile" type="file" /></label>
+          <label>使用範圍<select id="uploadScope"><option value="knowledge_base">加入知識庫</option><option value="session">僅此 Session</option></select></label>
           <label class="wide">知識庫<select id="uploadKbId"></select></label>
+          <label class="wide">Session ID（留空將自動建立）<input id="uploadSessionId" /></label>
           <label>密級<select id="uploadLevel"><option>public</option><option selected>internal</option><option>confidential</option><option>restricted</option></select></label>
           <label>部門<input id="uploadDept" /></label>
           <label>類型<input id="uploadType" value="manual_upload" /></label>
@@ -825,6 +827,7 @@ function renderDocuments() {
   $("#refreshDocsBtn").addEventListener("click", refreshDocuments);
   $("#docStatusFilter").addEventListener("change", refreshDocuments);
   $("#uploadDocBtn").addEventListener("click", uploadDocument);
+  $("#uploadScope").addEventListener("change", updateUploadScopeFields);
   $("#docDetailBtn").addEventListener("click", () => documentAction("detail"));
   $("#docStatusBtn").addEventListener("click", () => documentAction("status"));
   $("#docReindexBtn").addEventListener("click", () => documentAction("reindex"));
@@ -833,7 +836,15 @@ function renderDocuments() {
   $("#saveDocPermBtn").addEventListener("click", saveDocPermission);
   $("#deletePermBtn").addEventListener("click", deletePermission);
   syncKbSelectors();
+  $("#uploadSessionId").value = state.sessionId;
+  updateUploadScopeFields();
   renderDocumentTable();
+}
+
+function updateUploadScopeFields() {
+  const sessionScope = $("#uploadScope")?.value === "session";
+  if ($("#uploadKbId")) $("#uploadKbId").disabled = sessionScope;
+  if ($("#uploadSessionId")) $("#uploadSessionId").disabled = !sessionScope;
 }
 
 async function refreshDocuments() {
@@ -855,16 +866,26 @@ async function uploadDocument() {
   try {
     const file = $("#uploadFile").files[0];
     if (!file) throw new Error("請選擇檔案");
+    const scope = $("#uploadScope").value;
     const kbId = $("#uploadKbId").value || state.selectedKbId;
-    if (!kbId) throw new Error("請先選擇知識庫");
+    if (scope === "knowledge_base" && !kbId) throw new Error("請先選擇知識庫");
     const form = new FormData();
     form.append("file", file);
-    form.append("knowledge_base_id", kbId);
+    form.append("scope", scope);
+    if (scope === "knowledge_base") form.append("knowledge_base_id", kbId);
+    const sessionId = $("#uploadSessionId").value.trim();
+    if (scope === "session" && sessionId) form.append("session_id", sessionId);
     form.append("confidential_level", $("#uploadLevel").value);
     if ($("#uploadDept").value.trim()) form.append("department", $("#uploadDept").value.trim());
     if ($("#uploadType").value.trim()) form.append("document_type", $("#uploadType").value.trim());
     if ($("#uploadVersion").value.trim()) form.append("version", $("#uploadVersion").value.trim());
     const payload = await api("/documents/upload", { method: "POST", body: form });
+    if (payload.session_id) {
+      state.sessionId = payload.session_id;
+      localStorage.setItem("lmAgentSessionId", state.sessionId);
+      $("#uploadSessionId").value = state.sessionId;
+      if ($("#sessionIdInput")) $("#sessionIdInput").value = state.sessionId;
+    }
     state.selectedDocId = payload.document_id;
     localStorage.setItem("lmAgentDocId", state.selectedDocId);
     $("#docIdInput").value = state.selectedDocId;
@@ -884,6 +905,7 @@ function renderDocumentTable() {
           <td>${escapeHtml(item.document_id)}</td>
           <td>${statusBadge(item.status)}</td>
           <td>${statusBadge(item.confidential_level)}</td>
+          <td>${statusBadge(item.scope)}</td>
           <td>${escapeHtml(item.chunk_count)}</td>
           <td>${escapeHtml(item.department || "-")}</td>
           <td><button data-doc-id="${escapeHtml(item.document_id)}">選取</button></td>
@@ -891,7 +913,7 @@ function renderDocumentTable() {
       `,
     )
     .join("");
-  $("#docTable").innerHTML = table(["檔名", "ID", "狀態", "密級", "Chunks", "部門", ""], rows);
+  $("#docTable").innerHTML = table(["檔名", "ID", "狀態", "密級", "範圍", "Chunks", "部門", ""], rows);
   $$("#docTable button").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedDocId = button.dataset.docId;
@@ -1364,6 +1386,7 @@ function renderChat() {
             <button class="primary" id="askBtn">送出</button>
             <button id="streamBtn">串流</button>
             <button id="messagesBtn">訊息</button>
+            <button class="danger" id="deleteSessionBtn">刪除 Session</button>
           </div>
         </div>
         <div class="form-grid">
@@ -1390,15 +1413,15 @@ function renderChat() {
   $("#askBtn").addEventListener("click", askQuestion);
   $("#streamBtn").addEventListener("click", streamQuestion);
   $("#messagesBtn").addEventListener("click", loadSessionMessages);
+  $("#deleteSessionBtn").addEventListener("click", deleteSession);
   syncKbSelectors();
 }
 
 function chatPayload() {
   const kbId = $("#chatKbId").value || state.selectedKbId;
-  if (!kbId) throw new Error("請選擇知識庫");
   const payload = {
     session_id: $("#sessionIdInput").value.trim() || null,
-    knowledge_base_ids: [kbId],
+    knowledge_base_ids: kbId ? [kbId] : [],
     query: $("#chatQuery").value.trim(),
     top_k: Number($("#topK").value || 8),
     use_rerank: $("#useRerank").checked,
@@ -1415,6 +1438,7 @@ async function askQuestion() {
     state.sessionId = payload.session_id;
     localStorage.setItem("lmAgentSessionId", state.sessionId);
     $("#sessionIdInput").value = state.sessionId;
+    if ($("#uploadSessionId")) $("#uploadSessionId").value = state.sessionId;
     $("#answerOutput").textContent = payload.answer || "";
     writeOutput("#chatOutput", payload);
   } catch (error) {
@@ -1458,6 +1482,7 @@ async function streamQuestion() {
           state.sessionId = data.response.session_id;
           localStorage.setItem("lmAgentSessionId", state.sessionId);
           $("#sessionIdInput").value = state.sessionId;
+          if ($("#uploadSessionId")) $("#uploadSessionId").value = state.sessionId;
         }
       }
     }
@@ -1472,6 +1497,24 @@ async function loadSessionMessages() {
     const id = $("#sessionIdInput").value.trim() || state.sessionId;
     if (!id) throw new Error("請輸入 Session ID");
     writeOutput("#chatOutput", await api(`/chat/sessions/${id}/messages`));
+  } catch (error) {
+    writeOutput("#chatOutput", errorPayload(error));
+  }
+}
+
+async function deleteSession() {
+  try {
+    const id = $("#sessionIdInput").value.trim() || state.sessionId;
+    if (!id) throw new Error("請輸入 Session ID");
+    if (!window.confirm("刪除 Session 將一併清除聊天訊息及 Session 暫存文件，確定繼續？")) return;
+    const payload = await api(`/chat/sessions/${id}`, { method: "DELETE" });
+    state.sessionId = "";
+    localStorage.removeItem("lmAgentSessionId");
+    $("#sessionIdInput").value = "";
+    if ($("#uploadSessionId")) $("#uploadSessionId").value = "";
+    $("#answerOutput").textContent = "";
+    writeOutput("#chatOutput", payload);
+    await refreshDocuments();
   } catch (error) {
     writeOutput("#chatOutput", errorPayload(error));
   }

@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, event
@@ -55,6 +56,10 @@ def create_database_engine(
     connect_timeout_seconds: int = 5,
 ) -> Engine:
     """Create a configured SQLAlchemy engine for PostgreSQL or SQLite."""
+
+    url = make_url(database_url)
+    if url.get_backend_name() == "sqlite" and url.database not in {None, "", ":memory:"}:
+        Path(url.database).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
     db_engine = create_engine(
         database_url,

@@ -1,15 +1,18 @@
-from sqlalchemy.types import UserDefinedType
+from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import JSONB
 
 try:
-    from pgvector.sqlalchemy import Vector
+    from pgvector.sqlalchemy import Vector as PostgreSQLVector
 except ImportError:
+    PostgreSQLVector = None
 
-    class Vector(UserDefinedType):
-        cache_ok = True
 
-        def __init__(self, dimension: int) -> None:
-            self.dimension = dimension
+def Vector(dimension: int):
+    portable = JSON()
+    if PostgreSQLVector is None:
+        return portable
+    return portable.with_variant(PostgreSQLVector(dimension), "postgresql")
 
-        def get_col_spec(self, **kw: object) -> str:
-            return f"VECTOR({self.dimension})"
 
+def JsonObject():
+    return JSON().with_variant(JSONB(), "postgresql")

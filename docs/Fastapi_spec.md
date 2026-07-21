@@ -2,6 +2,9 @@
 
 # 文件二：FastAPI API 規格書
 
+> LLM / agent 讀取入口：本文件描述語意與生命週期；執行時的機器可讀 schema 為
+> `GET /openapi.json`。所有 UUID 均使用 RFC 4122 字串，所有未列出的欄位都應視為不支援。
+
 ## 1. API 設計原則
 
 1. API version 使用 `/api/v1`。
@@ -96,8 +99,10 @@ Request fields:
 
 | 欄位                 | 型別     | 必填 | 說明                           |
 | ------------------ | ------ | -- | ---------------------------- |
-| file               | file   | 是  | PDF 或圖片                      |
-| knowledge_base_id  | string | 是  | 知識庫 ID                       |
+| file               | file   | 是  | PDF、圖片、DOCX、XLSX 或 PPTX     |
+| scope              | string | 否  | `knowledge_base`（預設）或 `session` |
+| knowledge_base_id  | UUID   | 條件式 | `scope=knowledge_base` 時必填      |
+| session_id         | UUID   | 否  | `scope=session` 時可填；省略則建立新 Session |
 | confidential_level | string | 是  | 文件分級                         |
 | department         | string | 否  | 所屬部門                         |
 | document_type      | string | 否  | paper / report / sop / image |
@@ -110,9 +115,19 @@ Response:
   "request_id": "req-001",
   "document_id": "doc-001",
   "status": "uploaded",
-  "message": "Document uploaded successfully."
+  "scope": "session",
+  "knowledge_base_id": null,
+  "session_id": "2ecaed2e-49e5-4b95-b14c-438ef177b233",
+  "message": "Document uploaded and queued for background processing."
 }
 ```
+
+Scope 規則（互斥）：
+
+- `knowledge_base`：必須傳 `knowledge_base_id`，不得傳 `session_id`。
+- `session`：不得傳 `knowledge_base_id`；`session_id` 省略時由伺服器建立並回傳。
+- Session 文件不會出現在任何知識庫或 LLMWiki 中，只能由相同 `session_id` 的 Chat 請求檢索。
+- 一般使用者只能使用自己擁有的 Session；管理員可維運所有 Session。
 
 ---
 
@@ -187,7 +202,9 @@ Response:
   "document_id": "doc-001",
   "filename": "paper.pdf",
   "title": "Defect Detection Review",
+  "scope": "knowledge_base",
   "knowledge_base_id": "kb-001",
+  "session_id": null,
   "language": "en",
   "confidential_level": "internal",
   "department": "R&D",
@@ -313,6 +330,21 @@ Request:
 }
 ```
 
+`knowledge_base_ids` 可省略或傳空陣列。檢索來源為指定知識庫，加上 `session_id`
+所綁定的 Session 文件；若只需要暫存文件，請傳空陣列：
+
+```json
+{
+  "session_id": "2ecaed2e-49e5-4b95-b14c-438ef177b233",
+  "knowledge_base_ids": [],
+  "query": "摘要我剛才上傳的文件",
+  "top_k": 8,
+  "use_rerank": true,
+  "use_masking": true,
+  "use_tools": false
+}
+```
+
 Response:
 
 ```json
@@ -382,6 +414,32 @@ Response:
   ]
 }
 ```
+
+---
+
+### 7.4 刪除 Session
+
+```http
+DELETE /api/v1/chat/sessions/{session_id}
+Authorization: Bearer <token>
+```
+
+刪除範圍包含該 Session 的聊天訊息、retrieval/LLM/masking 紀錄、處理工作、
+Session 文件、切片、圖片、原始檔與 Markdown。知識庫文件不受影響。操作不可復原。
+
+Response:
+
+```json
+{
+  "session_id": "2ecaed2e-49e5-4b95-b14c-438ef177b233",
+  "deleted_documents": 1,
+  "deleted_messages": 4,
+  "deleted_files": 3,
+  "status": "deleted"
+}
+```
+
+錯誤：不存在回傳 `404 INVALID_REQUEST`；非擁有者回傳 `403 PERMISSION_DENIED`。
 
 ---
 

@@ -7,9 +7,10 @@ from fastapi import UploadFile
 from PIL import Image
 from sqlalchemy.orm import Session
 
-from app.core.constants import ConfidentialLevel, DocumentStatus, ErrorCode
+from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal
+from app.models.chat import ChatSession
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.document_image import DocumentImage
@@ -26,6 +27,7 @@ from app.schemas.document import (
     ReindexResponse,
 )
 from app.services.chunking_service import ChunkingService, TextChunk
+from app.services.audit_service import AuditService
 from app.services.embedding_service import EmbeddingService
 from app.services.image_ocr_service import ImageOCRService, OCRUnavailableError
 from app.services.markdown_conversion_service import MarkdownConversionService
@@ -68,7 +70,9 @@ class DocumentIngestionService:
     async def queue_upload(
         self,
         file: UploadFile,
-        knowledge_base_id: UUID,
+        scope: DocumentScope,
+        knowledge_base_id: UUID | None,
+        session_id: UUID | None,
         confidential_level: ConfidentialLevel,
         department: str | None,
         document_type: str | None,
@@ -85,16 +89,25 @@ class DocumentIngestionService:
                 400,
             )
 
+        knowledge_base_id, session_id, created_by = self._resolve_upload_scope(
+            scope=scope,
+            knowledge_base_id=knowledge_base_id,
+            session_id=session_id,
+            principal=principal,
+            title_seed=file.filename,
+        )
         content = await file.read()
         document = await self.create_uploaded_document(
             content=content,
             original_filename=file.filename,
             knowledge_base_id=knowledge_base_id,
+            session_id=session_id,
             confidential_level=confidential_level,
             department=department,
             document_type=document_type,
             version=version,
             principal=principal,
+            created_by=created_by,
         )
         job = ProcessingQueueService(self.db).enqueue(document.id, "document")
         logger.info(
@@ -105,6 +118,9 @@ class DocumentIngestionService:
             request_id=request_id,
             document_id=document.id,
             status=DocumentStatus(document.status),
+            scope=scope,
+            knowledge_base_id=document.knowledge_base_id,
+            session_id=document.session_id,
             message="Document uploaded and queued for background processing.",
         )
 
@@ -162,17 +178,26 @@ class DocumentIngestionService:
         self,
         content: bytes,
         original_filename: str,
-        knowledge_base_id: UUID,
+        knowledge_base_id: UUID | None,
         confidential_level: ConfidentialLevel,
+        session_id: UUID | None = None,
         department: str | None = None,
         document_type: str | None = None,
         version: str | None = None,
         principal: Principal | None = None,
+        created_by: UUID | None = None,
     ) -> Document:
         if self.db is None:
             raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
 
-        self._ensure_knowledge_base_exists(knowledge_base_id)
+        if (knowledge_base_id is None) == (session_id is None):
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "Exactly one of knowledge_base_id or session_id is required.",
+                400,
+            )
+        if knowledge_base_id is not None:
+            self._ensure_knowledge_base_exists(knowledge_base_id)
         file_type = infer_file_type(original_filename)
         if file_type not in SUPPORTED_UPLOAD_TYPES:
             raise APIError(
@@ -185,6 +210,7 @@ class DocumentIngestionService:
         file_path = await self.storage.save_original(filename, content)
         document = Document(
             knowledge_base_id=knowledge_base_id,
+            session_id=session_id,
             filename=filename,
             original_filename=original_filename,
             title=Path(original_filename).stem,
@@ -197,7 +223,7 @@ class DocumentIngestionService:
             department=department,
             version=version,
             status=DocumentStatus.UPLOADED.value,
-            created_by=None,
+            created_by=created_by,
         )
         document_repo = DocumentRepository(self.db)
         document_repo.add(document)
@@ -223,7 +249,9 @@ class DocumentIngestionService:
             document_id=document.id,
             filename=document.original_filename or document.filename,
             title=document.title,
+            scope=self._document_scope(document),
             knowledge_base_id=document.knowledge_base_id,
+            session_id=document.session_id,
             language=document.language,
             confidential_level=ConfidentialLevel(document.confidential_level),
             department=document.department,
@@ -287,7 +315,9 @@ class DocumentIngestionService:
             title=document.title,
             status=DocumentStatus(document.status),
             confidential_level=ConfidentialLevel(document.confidential_level),
+            scope=self._document_scope(document),
             knowledge_base_id=document.knowledge_base_id,
+            session_id=document.session_id,
             department=document.department,
             page_count=document.page_count,
             chunk_count=document.chunk_count,
@@ -659,6 +689,57 @@ class DocumentIngestionService:
     def _ensure_knowledge_base_exists(self, knowledge_base_id: UUID) -> None:
         if self.db.get(KnowledgeBase, knowledge_base_id) is None:
             raise APIError(ErrorCode.INVALID_REQUEST, "Knowledge base not found.", 400)
+
+    def _resolve_upload_scope(
+        self,
+        *,
+        scope: DocumentScope,
+        knowledge_base_id: UUID | None,
+        session_id: UUID | None,
+        principal: Principal,
+        title_seed: str,
+    ) -> tuple[UUID | None, UUID | None, UUID]:
+        audit = AuditService(self.db)
+        user = audit.ensure_user(principal)
+        if scope == DocumentScope.KNOWLEDGE_BASE:
+            if knowledge_base_id is None or session_id is not None:
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    "knowledge_base scope requires knowledge_base_id and forbids session_id.",
+                    400,
+                )
+            self._ensure_knowledge_base_exists(knowledge_base_id)
+            return knowledge_base_id, None, user.id
+
+        if knowledge_base_id is not None:
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "session scope requires knowledge_base_id to be omitted.",
+                400,
+            )
+        if session_id is None:
+            session = audit.ensure_session(
+                principal=principal,
+                user=user,
+                session_id=None,
+                title_seed=title_seed,
+            )
+        else:
+            session = self.db.get(ChatSession, session_id)
+            if session is None:
+                raise APIError(ErrorCode.INVALID_REQUEST, "Chat session not found.", 404)
+            if session.user_id != user.id and "admin" not in principal.roles:
+                raise APIError(
+                    ErrorCode.PERMISSION_DENIED,
+                    "User does not have permission to access this session.",
+                    403,
+                )
+        return None, session.id, user.id
+
+    def _document_scope(self, document: Document) -> DocumentScope:
+        if document.session_id is not None:
+            return DocumentScope.SESSION
+        return DocumentScope.KNOWLEDGE_BASE
 
     def _progress_for_status(self, status: DocumentStatus) -> int:
         return {

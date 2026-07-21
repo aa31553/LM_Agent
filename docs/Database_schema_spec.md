@@ -96,7 +96,8 @@ CREATE TABLE knowledge_bases (
 ```sql
 CREATE TABLE documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID REFERENCES knowledge_bases(id),
+    session_id UUID REFERENCES chat_sessions(id),
     filename TEXT NOT NULL,
     original_filename TEXT,
     title TEXT,
@@ -120,10 +121,14 @@ CREATE TABLE documents (
 );
 ```
 
+`knowledge_base_id` 與 `session_id` 必須恰好一個有值。前者為永久知識庫文件，後者為
+Session 暫存文件；刪除 Session 時由應用服務依外鍵順序清理文件及實體檔案。
+
 建議 index：
 
 ```sql
 CREATE INDEX idx_documents_kb ON documents(knowledge_base_id);
+CREATE INDEX idx_documents_session_id ON documents(session_id);
 CREATE INDEX idx_documents_status ON documents(status);
 CREATE INDEX idx_documents_confidential_level ON documents(confidential_level);
 CREATE INDEX idx_documents_department ON documents(department);
@@ -139,7 +144,7 @@ CREATE INDEX idx_documents_department ON documents(department);
 CREATE TABLE document_chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID REFERENCES knowledge_bases(id),
     chunk_index INT NOT NULL,
     content TEXT NOT NULL,
     masked_content TEXT,
@@ -403,14 +408,14 @@ CREATE TABLE prompt_templates (
 ## 19. document_images
 
 The image extraction extension stores figures and page-render fallbacks separately from
-text chunks. Each image remains traceable to its source document and knowledge base, and
-may be linked to the image-derived chunk used for retrieval.
+text chunks. Each image remains traceable to its source document and optional knowledge
+base (null for Session scope), and may be linked to the image-derived chunk used for retrieval.
 
 ```sql
 CREATE TABLE document_images (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id),
-    knowledge_base_id UUID NOT NULL REFERENCES knowledge_bases(id),
+    knowledge_base_id UUID REFERENCES knowledge_bases(id),
     chunk_id UUID REFERENCES document_chunks(id),
     page_number INT NOT NULL,
     image_index INT NOT NULL,

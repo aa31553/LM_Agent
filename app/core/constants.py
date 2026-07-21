@@ -33,6 +33,11 @@ class DocumentStatus(TextEnum):
     ARCHIVED = "archived"
 
 
+class DocumentScope(TextEnum):
+    KNOWLEDGE_BASE = "knowledge_base"
+    SESSION = "session"
+
+
 class PermissionSubjectType(TextEnum):
     USER = "user"
     ROLE = "role"

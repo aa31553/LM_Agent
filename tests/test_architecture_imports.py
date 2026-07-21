@@ -13,6 +13,7 @@ def test_app_factory_imports() -> None:
     assert "/api/v1/chat/query" in paths
     assert "/api/v1/documents/upload" in paths
     assert "/api/v1/admin/llm/test" in paths
+    assert "/api/v1/chat/sessions/{session_id}" in paths
 
 
 def test_api_documentation_uses_only_local_static_assets() -> None:

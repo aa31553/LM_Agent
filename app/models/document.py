@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -9,9 +9,17 @@ from app.db.base import Base
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        CheckConstraint(
+            "(knowledge_base_id IS NOT NULL AND session_id IS NULL) OR "
+            "(knowledge_base_id IS NULL AND session_id IS NOT NULL)",
+            name="ck_documents_exactly_one_scope",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    knowledge_base_id: Mapped[UUID] = mapped_column(ForeignKey("knowledge_bases.id"), nullable=False)
+    knowledge_base_id: Mapped[UUID | None] = mapped_column(ForeignKey("knowledge_bases.id"))
+    session_id: Mapped[UUID | None] = mapped_column(ForeignKey("chat_sessions.id"), index=True)
     filename: Mapped[str] = mapped_column(Text, nullable=False)
     original_filename: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)

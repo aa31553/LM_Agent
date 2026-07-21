@@ -71,6 +71,12 @@ cross-thread access used by FastAPI. In-memory URLs such as
 the same database. PostgreSQL remains required for pgvector similarity search,
 `pg_trgm`, and the PostgreSQL migration scripts.
 
+LM Agent checks the connection and required schema before serving requests.
+Missing SQLite tables are created automatically, legacy document tables are
+upgraded for session-scoped files while preserving rows, and PostgreSQL SQL
+migrations are applied when required. A failed connection stops startup with a
+clear error instead of starting against an unusable database.
+
 Initialize the schema:
 
 ```bash
@@ -438,6 +444,7 @@ Important endpoints:
 - `POST /api/v1/chat/query`
 - `POST /api/v1/chat/stream`
 - `GET /api/v1/chat/sessions/{session_id}/messages`
+- `DELETE /api/v1/chat/sessions/{session_id}`
 - `POST /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/audit/chat-logs`
@@ -449,6 +456,14 @@ check for the configured OpenAI-compatible LLM. It accepts `system_prompt` and
 latency, and answer. It intentionally does not initialize a database session,
 RAG retrieval, LLMWiki, audit records, or `knowledge_base_ids`, making it safe
 for lightweight SQLite connectivity testing.
+
+Document uploads support `scope=knowledge_base` and `scope=session`. Session-scoped
+uploads omit `knowledge_base_id`, may omit `session_id` to create a new session, and
+are retrieved only when Chat uses that same session. `knowledge_base_ids` may be an
+empty list for session-only RAG. Deleting `/api/v1/chat/sessions/{session_id}` removes
+the conversation and all of its temporary documents and local artifacts without
+affecting knowledge-base documents. See `docs/Fastapi_spec.md` or `/openapi.json` for
+the LLM-readable API contract.
 
 Standard error response:
 
