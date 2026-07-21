@@ -118,7 +118,7 @@ class OpenAICompatibleClient:
                     async for chunk in self._iter_stream_content(response):
                         yield chunk
             else:
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(verify=settings.llm_ssl_verify) as client:
                     async with client.stream(
                         "POST",
                         url,
@@ -185,7 +185,7 @@ class OpenAICompatibleClient:
                     timeout=settings.llm_timeout_seconds,
                 )
             else:
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(verify=settings.llm_ssl_verify) as client:
                     response = await client.post(
                         url,
                         json=payload,
