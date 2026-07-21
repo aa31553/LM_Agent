@@ -411,6 +411,7 @@ Important endpoints:
 
 - `GET /api/v1/health`
 - `GET /api/v1/health/dependencies`
+- `POST /api/v1/admin/llm/test`
 - `POST /api/v1/documents/upload`
 - `GET /api/v1/skills`
 - `POST /api/v1/skills`
@@ -441,6 +442,13 @@ Important endpoints:
 - `GET /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/audit/chat-logs`
 - `GET /api/v1/audit/masking-events`
+
+`POST /api/v1/admin/llm/test` is an administrator-only direct connectivity
+check for the configured OpenAI-compatible LLM. It accepts `system_prompt` and
+`message`, calls `/v1/chat/completions`, and returns the endpoint, model,
+latency, and answer. It intentionally does not initialize a database session,
+RAG retrieval, LLMWiki, audit records, or `knowledge_base_ids`, making it safe
+for lightweight SQLite connectivity testing.
 
 Standard error response:
 

@@ -1520,6 +1520,18 @@ function renderAdmin() {
       </div>
       <div class="panel">
         <div class="panel-header">
+          <h2>純 LLM 連線測試</h2>
+          <button class="primary" id="llmTestBtn">測試連線</button>
+        </div>
+        <p class="muted">不使用 Knowledge Base、RAG、LLMWiki 或資料庫 Session。</p>
+        <div class="form-grid">
+          <label class="full">System Prompt<textarea id="llmTestSystem">You are a helpful software engineering assistant.</textarea></label>
+          <label class="full">測試訊息<textarea id="llmTestMessage">How far is the moon from earth?</textarea></label>
+        </div>
+        <div id="llmTestOutput" class="output compact-output"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">
           <h2>稽核</h2>
           <div class="actions">
             <button data-audit="/audit/chat-logs">Chat</button>
@@ -1548,6 +1560,7 @@ function renderAdmin() {
   $("#toggleRuleBtn").addEventListener("click", toggleRule);
   $("#retentionPreviewBtn").addEventListener("click", () => runRetention(false));
   $("#retentionApplyBtn").addEventListener("click", () => runRetention(true));
+  $("#llmTestBtn").addEventListener("click", testLLMConnection);
   $$("#admin [data-audit]").forEach((button) => button.addEventListener("click", () => loadAudit(button.dataset.audit)));
 }
 
@@ -1594,6 +1607,28 @@ async function runRetention(apply) {
       audit_event_retention_days: Number($("#auditDays").value),
     },
   });
+}
+
+async function testLLMConnection() {
+  const button = $("#llmTestBtn");
+  button.disabled = true;
+  button.textContent = "測試中…";
+  try {
+    const payload = await api("/admin/llm/test", {
+      method: "POST",
+      json: {
+        system_prompt: $("#llmTestSystem").value.trim(),
+        message: $("#llmTestMessage").value.trim(),
+      },
+    });
+    writeOutput("#llmTestOutput", payload);
+    showAlert(`LLM 連線成功（${payload.latency_ms} ms）`, "success");
+  } catch (error) {
+    writeOutput("#llmTestOutput", errorPayload(error));
+  } finally {
+    button.disabled = false;
+    button.textContent = "測試連線";
+  }
 }
 
 async function loadAudit(basePath) {

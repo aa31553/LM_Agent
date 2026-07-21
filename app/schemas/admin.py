@@ -30,6 +30,23 @@ class OperationMetricsResponse(BaseModel):
     audit: dict[str, int]
 
 
+class LLMTestRequest(BaseModel):
+    system_prompt: str = Field(
+        default="You are a helpful software engineering assistant.",
+        min_length=1,
+        max_length=4_000,
+    )
+    message: str = Field(min_length=1, max_length=20_000)
+
+
+class LLMTestResponse(BaseModel):
+    status: str
+    model: str
+    endpoint: str
+    latency_ms: float
+    answer: str
+
+
 class SensitiveRuleRequest(BaseModel):
     entity_type: str = Field(min_length=1, max_length=64)
     value: str = Field(min_length=1)

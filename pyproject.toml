@@ -1,6 +1,6 @@
 [project]
 name = "lm-agent"
-version = "0.2.3"
+version = "0.2.4"
 description = "Enterprise AI Agent / RAG backend for internal document question answering."
 requires-python = ">=3.11"
 dependencies = [

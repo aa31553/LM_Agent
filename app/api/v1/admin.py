@@ -1,12 +1,18 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+import time
 from uuid import UUID
 
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
+from app.integrations.openai_compatible_client import build_api_url
 from app.schemas.admin import (
+    LLMTestRequest,
+    LLMTestResponse,
     OperationMetricsResponse,
     RetentionPolicyRequest,
     RetentionPolicyResponse,
@@ -17,6 +23,7 @@ from app.schemas.admin import (
 from app.services.operation_monitoring_service import OperationMonitoringService
 from app.services.retention_service import RetentionService
 from app.services.sensitive_dictionary_service import SensitiveDictionaryService
+from app.services.llm_service import LLMService
 
 router = APIRouter()
 
@@ -25,6 +32,29 @@ router = APIRouter()
 async def admin_status(principal: Principal = Depends(get_current_principal)) -> dict[str, str]:
     _ensure_admin(principal)
     return {"status": "ok"}
+
+
+@router.post("/llm/test", response_model=LLMTestResponse)
+async def test_llm_connection(
+    payload: LLMTestRequest,
+    principal: Principal = Depends(get_current_principal),
+) -> LLMTestResponse:
+    """Test the configured LLM without initializing database-backed RAG services."""
+
+    _ensure_admin(principal)
+    started_at = time.perf_counter()
+    answer = await LLMService().complete(
+        system_prompt=payload.system_prompt,
+        user_prompt=payload.message,
+        image_paths=[],
+    )
+    return LLMTestResponse(
+        status="ok",
+        model=settings.llm_model,
+        endpoint=build_api_url(settings.llm_base_url, settings.llm_api_path),
+        latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        answer=answer,
+    )
 
 
 @router.get("/operations/metrics", response_model=OperationMetricsResponse)
