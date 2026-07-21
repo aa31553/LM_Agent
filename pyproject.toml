@@ -54,3 +54,6 @@ app = [
     "default_skills/*/agents/*.yaml",
     "static/docs/*",
 ]
+"services.embedding_service" = [
+    "static/docs/*",
+]

@@ -19,7 +19,8 @@ set "PYTHONPATH=%PROJECT_ROOT%;%PYTHONPATH%"
 echo ============================================================
 echo LM Agent Embedding Service
 echo API: http://%EMBEDDING_HOST%:%EMBEDDING_PORT%
-echo Docs: http://%EMBEDDING_HOST%:%EMBEDDING_PORT%/docs
+echo Swagger: http://%EMBEDDING_HOST%:%EMBEDDING_PORT%/docs
+echo ReDoc: http://%EMBEDDING_HOST%:%EMBEDDING_PORT%/redoc
 echo Model: %EMBEDDING_MODEL_PATH%
 echo Press Ctrl+C to stop the service.
 echo ============================================================

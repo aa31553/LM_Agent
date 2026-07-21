@@ -629,6 +629,24 @@ Authorization: Bearer <admin-token>
 回應包含 `configured_dimension`、`actual_dimension`、`latency_ms`、
 `vector_norm` 與前 8 個向量值。兩個端點都不建立資料庫 Session。
 
+獨立 Embedding Service（預設 `http://127.0.0.1:1234`）本身提供：
+
+```http
+POST /v1/embeddings
+GET  /v1/models
+GET  /health/live
+GET  /health/ready
+GET  /status
+GET  /metrics
+GET  /openapi.json
+GET  /docs
+GET  /redoc
+```
+
+`/docs` 與 `/redoc` 完全離線：FastAPI 預設的 CDN 文件路由已停用，兩個頁面只引用
+同一服務的 `/docs-assets/*`，ReDoc 不載入 Google Fonts。部署時必須保留
+`services/embedding_service/static/docs/`；服務不會在資源缺失時改向公網 CDN 載入。
+
 ---
 
 ## 11. Error Response 格式

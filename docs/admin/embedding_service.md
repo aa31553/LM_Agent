@@ -31,8 +31,9 @@ bases, Sessions, DLP rules, or LLM settings.
 services\embedding_service\start_embedding_service.bat 1234
 ```
 
-The first parameter is the API port. The console prints the API and Swagger URLs and remains
-open after failure so the operator can read the error. Runtime model downloads are disabled.
+The first parameter is the API port. The console prints the API, Swagger, and ReDoc URLs and
+remains open after failure so the operator can read the error. Runtime model downloads are
+disabled.
 
 ## Required alignment
 
@@ -54,7 +55,15 @@ rebuild the pgvector column/index before serving retrieval traffic.
 - `/health/ready` returns 503 until the model is loaded.
 - `/status` returns JSON for the LM Agent Admin page.
 - `/metrics` returns Prometheus text counters.
-- `/docs` documents the service contract.
+- `/docs` provides Swagger UI using only service-hosted assets.
+- `/redoc` provides ReDoc using only service-hosted assets.
+- `/openapi.json` provides the schema used by both documentation pages.
+
+The standalone service disables FastAPI's CDN-backed default documentation routes and replaces
+them with local routes. JavaScript, CSS, favicon, OAuth redirect, and OpenAPI schema are all
+served by the same process under `/docs-assets`; ReDoc also disables Google Fonts. Therefore the
+documentation remains usable on a host with no internet or external DNS. Keep
+`services/embedding_service/static/docs/` when copying or packaging the service.
 
 If the model path or dependency is invalid, the process intentionally remains alive with
 `model_state=error`; read `/status` or the Admin UI for the actionable error.
@@ -81,6 +90,7 @@ first eight values. API keys are never returned.
 - Service API and validation: `services/embedding_service/app.py`
 - Model backend/device behavior: `services/embedding_service/runtime.py`
 - Service environment parsing: `services/embedding_service/config.py`
+- Offline Swagger/ReDoc assets: `services/embedding_service/static/docs/`
 - LM Agent HTTP adapter: `app/integrations/embedding_client.py`
 - Admin proxy endpoints: `app/api/v1/admin.py`
 - Admin UI: `frontend/app.js`

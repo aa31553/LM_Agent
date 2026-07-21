@@ -13,7 +13,13 @@ It does not import the LM Agent database or RAG services and can run on another 
 | `GET /health/ready` | Model readiness; returns 503 until ready |
 | `GET /status` | JSON model and runtime metrics |
 | `GET /metrics` | Prometheus text metrics |
-| `GET /docs` | Swagger UI |
+| `GET /docs` | Fully offline Swagger UI |
+| `GET /redoc` | Fully offline ReDoc |
+| `GET /openapi.json` | OpenAPI schema used by both pages |
+
+Swagger UI and ReDoc do not load JavaScript, CSS, fonts, favicons, or schemas from the
+internet. All browser assets are vendored under `static/docs/` and served by this process from
+`/docs-assets`. This remains true when the host has no internet route or DNS access.
 
 ## Windows setup
 
@@ -38,6 +44,17 @@ start_embedding_service.bat 1234
 The first argument overrides the API port. If omitted, `EMBEDDING_PORT` is used, then `1234`.
 The window remains open after an error so the reason is visible. The script forces Hugging Face
 and Transformers offline mode; no model is downloaded at runtime.
+
+After startup, open either local documentation page:
+
+```text
+http://127.0.0.1:1234/docs
+http://127.0.0.1:1234/redoc
+```
+
+The `.bat` startup banner prints both URLs. Do not delete `static/docs/` when copying the service
+to an offline host; missing assets intentionally produce a visible 404 instead of falling back to
+a public CDN.
 
 If you set `EMBEDDING_SERVICE_API_KEY`, configure the same value as `EMBEDDING_API_KEY` in LM
 Agent. Leave both empty only on a trusted localhost connection.
