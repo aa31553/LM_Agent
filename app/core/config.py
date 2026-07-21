@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://127.0.0.1:1234"
     llm_api_path: str = "/v1/chat/completions"
     llm_api_key: str = ""
+    llm_ssl_verify: bool = True
     llm_model: str = "google/gemma-4-12b-qat"
     llm_timeout_seconds: int = Field(default=90, ge=1)
     llm_temperature: float = 0.1
