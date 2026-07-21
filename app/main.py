@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.db.startup import ensure_database_ready
+from app.workers.document_tasks import DocumentTasks
 
 DOCS_ASSETS_DIR = Path(__file__).resolve().parent / "static" / "docs"
 DOCS_ASSETS_URL = "/docs-assets"
@@ -42,7 +44,29 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         ensure_database_ready()
-        yield
+        stop_event = asyncio.Event()
+        worker_task: asyncio.Task[None] | None = None
+        if settings.embedded_document_worker_enabled:
+            worker_task = asyncio.create_task(
+                DocumentTasks().run_forever(stop_event),
+                name="embedded-document-worker",
+            )
+        try:
+            yield
+        finally:
+            if worker_task is not None:
+                stop_event.set()
+                try:
+                    await asyncio.wait_for(
+                        worker_task,
+                        timeout=settings.worker_poll_interval_seconds + 1.0,
+                    )
+                except TimeoutError:
+                    worker_task.cancel()
+                    try:
+                        await worker_task
+                    except asyncio.CancelledError:
+                        pass
 
     app = FastAPI(
         title=settings.app_name,
