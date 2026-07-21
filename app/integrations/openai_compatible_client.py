@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -24,6 +25,30 @@ class ChatToolCall:
 class ChatCompletionResult:
     content: str
     tool_calls: list[ChatToolCall]
+
+
+def build_api_url(base_url: str, api_path: str) -> str:
+    """Join an API base URL and path without duplicating shared path segments."""
+
+    parsed_base = urlsplit(base_url.strip().rstrip("/"))
+    parsed_path = urlsplit(api_path.strip())
+    if not parsed_base.scheme or not parsed_base.netloc:
+        raise ValueError("LLM_BASE_URL must be an absolute HTTP(S) URL.")
+    if parsed_base.scheme not in {"http", "https"}:
+        raise ValueError("LLM_BASE_URL must use http or https.")
+    if parsed_path.scheme or parsed_path.netloc or parsed_path.query or parsed_path.fragment:
+        raise ValueError("LLM_API_PATH must be a URL path without a host, query, or fragment.")
+
+    base_parts = [part for part in parsed_base.path.split("/") if part]
+    api_parts = [part for part in parsed_path.path.split("/") if part]
+    overlap = 0
+    for size in range(min(len(base_parts), len(api_parts)), 0, -1):
+        if base_parts[-size:] == api_parts[:size]:
+            overlap = size
+            break
+
+    combined_path = "/" + "/".join(base_parts + api_parts[overlap:])
+    return urlunsplit((parsed_base.scheme, parsed_base.netloc, combined_path, "", ""))
 
 
 class OpenAICompatibleClient:
@@ -74,10 +99,11 @@ class OpenAICompatibleClient:
             "max_tokens": settings.llm_max_tokens,
             "stream": True,
         }
-        if settings.llm_reasoning_effort:
-            payload["reasoning_effort"] = settings.llm_reasoning_effort
+        reasoning_effort = settings.llm_reasoning_effort.strip()
+        if reasoning_effort and reasoning_effort.lower() != "none":
+            payload["reasoning_effort"] = reasoning_effort
         headers = self._headers()
-        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+        url = build_api_url(settings.llm_base_url, settings.llm_api_path)
 
         try:
             if self.http_client is not None:
@@ -139,15 +165,16 @@ class OpenAICompatibleClient:
             "top_p": settings.llm_top_p,
             "max_tokens": settings.llm_max_tokens,
         }
-        if settings.llm_reasoning_effort:
-            payload["reasoning_effort"] = settings.llm_reasoning_effort
+        reasoning_effort = settings.llm_reasoning_effort.strip()
+        if reasoning_effort and reasoning_effort.lower() != "none":
+            payload["reasoning_effort"] = reasoning_effort
         if tools:
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
         headers = self._headers()
-        url = f"{settings.llm_base_url.rstrip('/')}/chat/completions"
+        url = build_api_url(settings.llm_base_url, settings.llm_api_path)
 
         try:
             if self.http_client is not None:

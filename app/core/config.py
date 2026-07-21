@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.2.1"
+    app_version: str = "0.2.2"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -30,14 +30,15 @@ class Settings(BaseSettings):
     embedding_dimension: int = 1024
     embedding_batch_size: int = Field(default=16, ge=1)
 
-    llm_base_url: str = "http://127.0.0.1:1234/v1"
+    llm_base_url: str = "http://127.0.0.1:1234"
+    llm_api_path: str = "/v1/chat/completions"
     llm_api_key: str = ""
     llm_model: str = "google/gemma-4-12b-qat"
     llm_timeout_seconds: int = Field(default=90, ge=1)
     llm_temperature: float = 0.1
     llm_top_p: float = 0.9
     llm_max_tokens: int = 1536
-    llm_reasoning_effort: str = "none"
+    llm_reasoning_effort: str = ""
     llm_send_images_to_model: bool = False
 
     retrieval_top_k: int = 20

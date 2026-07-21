@@ -3,7 +3,40 @@ import pytest
 
 from app.core.config import settings
 from app.integrations.embedding_client import EmbeddingClient
-from app.integrations.openai_compatible_client import OpenAICompatibleClient
+from app.integrations.openai_compatible_client import OpenAICompatibleClient, build_api_url
+
+
+@pytest.mark.parametrize(
+    ("base_url", "api_path", "expected"),
+    [
+        (
+            "http://internal-llm:1234",
+            "/v1/chat/completions",
+            "http://internal-llm:1234/v1/chat/completions",
+        ),
+        (
+            "http://internal-llm:1234/v1",
+            "/v1/chat/completions",
+            "http://internal-llm:1234/v1/chat/completions",
+        ),
+        (
+            "https://internal-llm/gateway/v1/chat/completions",
+            "/v1/chat/completions",
+            "https://internal-llm/gateway/v1/chat/completions",
+        ),
+    ],
+)
+def test_build_api_url_supports_company_chat_completions_path(
+    base_url: str,
+    api_path: str,
+    expected: str,
+) -> None:
+    assert build_api_url(base_url, api_path) == expected
+
+
+def test_build_api_url_rejects_an_external_api_path_host() -> None:
+    with pytest.raises(ValueError, match="LLM_API_PATH"):
+        build_api_url("http://internal-llm:1234", "https://external.example/v1/chat/completions")
 
 
 @pytest.mark.asyncio
@@ -92,8 +125,61 @@ async def test_llm_client_uses_gemma_chat_completion_model() -> None:
 
     assert captured["url"] == "http://127.0.0.1:1234/v1/chat/completions"
     assert b"google/gemma-4-12b-qat" in captured["payload"]
-    assert b"reasoning_effort" in captured["payload"]
-    assert b"none" in captured["payload"]
+    assert b"reasoning_effort" not in captured["payload"]
     assert b"system" in captured["payload"]
     assert b"user" in captured["payload"]
     assert answer == "測試回答"
+
+
+@pytest.mark.asyncio
+async def test_llm_client_uses_configured_company_api_path(monkeypatch) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": "internal api ok"}}
+                ]
+            },
+        )
+
+    monkeypatch.setattr(settings, "llm_base_url", "http://company-llm.internal/v1")
+    monkeypatch.setattr(settings, "llm_api_path", "/v1/chat/completions")
+    monkeypatch.setattr(settings, "llm_api_key", "test-company-key")
+    transport = httpx.MockTransport(handler)
+
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        answer = await OpenAICompatibleClient(http_client=http_client).chat_completion(
+            system_prompt="system",
+            user_prompt="connection test",
+        )
+
+    assert captured["url"] == "http://company-llm.internal/v1/chat/completions"
+    assert captured["authorization"] == "Bearer test-company-key"
+    assert answer == "internal api ok"
+
+
+@pytest.mark.asyncio
+async def test_llm_client_only_sends_supported_reasoning_effort(monkeypatch) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = request.read()
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    monkeypatch.setattr(settings, "llm_reasoning_effort", "high")
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        await OpenAICompatibleClient(http_client=http_client).chat_completion(
+            system_prompt="system",
+            user_prompt="user",
+        )
+
+    assert b'"reasoning_effort":"high"' in captured["payload"]

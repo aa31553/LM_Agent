@@ -58,6 +58,19 @@ local PostgreSQL instance:
 DATABASE_URL=postgresql+psycopg://lm_agent:lm_agent@localhost:5432/lm_agent
 ```
 
+For lightweight local tools and tests, the SQLAlchemy connection layer also
+supports a file-backed SQLite database:
+
+```env
+DATABASE_URL=sqlite:///data/lm_agent.sqlite3
+```
+
+SQLite connections automatically enable foreign-key enforcement and allow the
+cross-thread access used by FastAPI. In-memory URLs such as
+`sqlite:///:memory:` use a shared static pool so all application sessions see
+the same database. PostgreSQL remains required for pgvector similarity search,
+`pg_trgm`, and the PostgreSQL migration scripts.
+
 Initialize the schema:
 
 ```bash
@@ -81,6 +94,23 @@ Run the API:
 ```bash
 uvicorn app.main:app --reload
 ```
+
+For an internal OpenAI-compatible LLM service, configure the server address and
+chat-completions path separately:
+
+```env
+LLM_BASE_URL=http://internal-llm-server:1234
+LLM_API_PATH=/v1/chat/completions
+LLM_API_KEY=
+LLM_MODEL=your-internal-model-name
+LLM_REASONING_EFFORT=
+```
+
+The client sends both normal and streaming chat requests to the configured
+`LLM_API_PATH`. Existing base URLs that already end in `/v1` remain compatible;
+the URL builder avoids creating a duplicated `/v1/v1/` path. The optional
+`reasoning_effort` request field is omitted unless the internal API explicitly
+supports it and `LLM_REASONING_EFFORT` is set to a value other than `none`.
 
 API docs will be available at:
 
