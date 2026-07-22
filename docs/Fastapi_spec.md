@@ -1,4 +1,10 @@
+# 文件版本入口
 
+- 給工程師、管理員與測試人員：[FastAPI Human Guide](FastAPI_Human_Guide.md)
+- 給 LLM、Agent 與程式碼產生器：[FastAPI LLM Reference](FastAPI_LLM_Reference.md)
+- 本文件保留詳細設計與歷史範例；執行時契約以 `GET /openapi.json` 為準。
+
+---
 
 # 文件二：FastAPI API 規格書
 
