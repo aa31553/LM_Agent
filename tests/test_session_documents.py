@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,14 +8,43 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+from app.core.constants import ConfidentialLevel
+from app.core.security import Principal
 from app.db.base import Base
 from app.db.session import create_database_engine, get_db
 from app.main import create_app
+from app.models.audit import AuditEvent
 from app.models.chat import ChatSession
 from app.models.document import Document, DocumentProcessingJob
 from app.models.document_chunk import DocumentChunk
 from app.models.user import User
 from app.rag.retriever import HybridRetriever
+from app.schemas.chat import ChatQueryRequest
+from app.services.rag_service import RAGService
+
+
+class FailIfCalledRetriever:
+    async def retrieve(self, **kwargs):
+        raise AssertionError("Retrieval must be skipped when no document source is available.")
+
+
+class GeneralKnowledgeLLM:
+    answer = "未檢索到相關文獻。以下依通用知識回答：我是內部智慧助理。"
+
+    async def complete(self, system_prompt, user_prompt, image_paths=None):
+        assert "no literature retrieval was performed" in system_prompt
+        assert "General knowledge only" in user_prompt
+        assert "Context:" not in user_prompt
+        assert image_paths == []
+        return self.answer
+
+    async def stream_complete(self, system_prompt, user_prompt, image_paths=None):
+        assert "no literature retrieval was performed" in system_prompt
+        assert "General knowledge only" in user_prompt
+        assert "Context:" not in user_prompt
+        assert image_paths == []
+        yield self.answer[:12]
+        yield self.answer[12:]
 
 
 @pytest.fixture
@@ -45,6 +74,16 @@ def _upload_session_document(client: TestClient, token: str = "admin"):
         headers=_headers(token),
         files={"file": ("temporary.png", b"not-yet-processed", "image/png")},
         data={"scope": "session", "confidential_level": "internal"},
+    )
+
+
+def _principal() -> Principal:
+    return Principal(
+        external_user_id=f"general-mode-{uuid4()}",
+        username="general-mode",
+        department="qa",
+        roles={"employee"},
+        clearance_level=ConfidentialLevel.INTERNAL,
     )
 
 
@@ -124,6 +163,105 @@ def test_user_cannot_delete_another_users_session(session_document_client) -> No
 
     assert response.status_code == 403
     assert response.json()["error_code"] == "PERMISSION_DENIED"
+
+
+@pytest.mark.asyncio
+async def test_query_without_document_scope_uses_general_knowledge_mode(
+    session_document_client,
+) -> None:
+    _, session_factory, _ = session_document_client
+    with session_factory() as db:
+        service = RAGService(db)
+        service.retriever = FailIfCalledRetriever()
+        service.llm_service = GeneralKnowledgeLLM()
+
+        response = await service.answer(
+            ChatQueryRequest(
+                session_id=uuid4(),
+                knowledge_base_ids=[],
+                query="你好，請自我介紹",
+                top_k=8,
+                use_rerank=True,
+                use_masking=True,
+                use_tools=False,
+            ),
+            request_id="general-query-test",
+            principal=_principal(),
+        )
+
+        assert response.answer == GeneralKnowledgeLLM.answer
+        assert response.citations == []
+        assert response.images == []
+        audit_event = db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "query_executed",
+                AuditEvent.target_id == response.message_id,
+            )
+        )
+        assert audit_event is not None
+        assert audit_event.event_metadata["answer_mode"] == "general_knowledge"
+        assert audit_event.event_metadata["retrieval_skipped"] is True
+        assert audit_event.event_metadata["session_documents_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_stream_without_document_scope_uses_general_knowledge_mode(
+    session_document_client,
+) -> None:
+    _, session_factory, _ = session_document_client
+    with session_factory() as db:
+        service = RAGService(db)
+        service.retriever = FailIfCalledRetriever()
+        service.llm_service = GeneralKnowledgeLLM()
+
+        events = [
+            event
+            async for event in service.stream_answer(
+                ChatQueryRequest(
+                    session_id=uuid4(),
+                    knowledge_base_ids=[],
+                    query="你好，請自我介紹",
+                    use_tools=False,
+                ),
+                request_id="general-stream-test",
+                principal=_principal(),
+            )
+        ]
+
+        assert [event["event"] for event in events] == ["start", "delta", "delta", "done"]
+        assert events[-1]["response"].answer == GeneralKnowledgeLLM.answer
+        assert events[-1]["response"].citations == []
+
+
+def test_session_document_presence_includes_documents_not_ready_for_retrieval(
+    session_document_client,
+) -> None:
+    _, session_factory, tmp_path = session_document_client
+    with session_factory() as db:
+        user = User(
+            external_user_id="pending-document-owner",
+            username="pending-document-owner",
+            clearance_level="internal",
+        )
+        db.add(user)
+        db.flush()
+        chat_session = ChatSession(user_id=user.id, title="pending document")
+        db.add(chat_session)
+        db.flush()
+        db.add(
+            Document(
+                session_id=chat_session.id,
+                filename="pending.md",
+                original_filename="pending.md",
+                file_type="markdown",
+                file_path=str(tmp_path / "pending.md"),
+                confidential_level="internal",
+                status="uploaded",
+            )
+        )
+        db.flush()
+
+        assert RAGService(db)._session_has_documents(chat_session.id) is True
 
 
 @pytest.mark.asyncio

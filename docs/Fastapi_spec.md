@@ -372,6 +372,19 @@ Request:
 }
 ```
 
+問答模式依文件來源自動切換：
+
+| 條件 | 模式 | 行為 |
+|---|---|---|
+| 有指定 `knowledge_base_ids` | RAG | 執行知識庫與同 Session 文件檢索 |
+| 未指定知識庫，但 Session 存在任何文件紀錄 | Session RAG | 執行相同 Session 的文件檢索 |
+| 未指定知識庫，且 Session 完全沒有文件 | 通用知識 | 略過 Embedding、向量檢索與 Rerank，直接呼叫 LLM |
+
+通用知識模式會明確告知 LLM 此次沒有提供或檢索到相關文獻，只能依通用知識
+回答，且不得捏造文件、文獻、引用、頁碼或來源連結。API 回應的 `citations` 與
+`images` 會是空陣列。若有文件來源但檢索不到相關內容，仍維持嚴格 RAG 行為，
+不會改用通用知識補答。
+
 Response:
 
 ```json

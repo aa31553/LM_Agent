@@ -434,13 +434,34 @@ Citation 欄位：
 
 ## 14. 無資料時回答策略
 
-若檢索結果不足，回答應為：
+先依請求是否具有文件來源決定模式：
+
+1. 有 `knowledge_base_ids`，或相同 `session_id` 存在任何文件紀錄時，執行 RAG。
+2. RAG 已執行但檢索結果不足時，回答應為：
 
 ```text
 目前可存取的知識庫中沒有找到足夠資料回答此問題。建議補充相關文件，或確認是否有權限存取對應資料。
 ```
 
-不可讓 LLM 自行補充外部知識，除非系統明確允許 web search 或外部知識，但 MVP 不建議開放。
+此情況不可讓 LLM 自行以通用知識補充答案。
+
+若請求未指定 `knowledge_base_ids`，而且相同 `session_id` 完全沒有文件紀錄，則
+略過 Embedding、向量檢索與 Rerank，改用通用知識模式。系統提示必須告知 LLM：
+
+- 本次沒有提供或檢索到相關文獻。
+- 回答只能使用通用知識，並明確標示此限制。
+- 不得捏造文件、文獻、引用、頁碼、來源連結或公司內部事實。
+- 對需要即時資料、公司專屬資訊或無把握的內容，必須明確說明限制。
+
+通用知識模式的 API `citations` 與 `images` 必須為空陣列，稽核事件需記錄：
+
+```json
+{
+  "answer_mode": "general_knowledge",
+  "retrieval_skipped": true,
+  "session_documents_available": false
+}
+```
 
 ---
 

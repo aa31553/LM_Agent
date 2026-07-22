@@ -1,13 +1,16 @@
 import time
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.constants import ErrorCode, MessageRole, RiskLevel
 from app.core.exceptions import APIError
 from app.core.security import Principal
+from app.models.document import Document
 from app.rag.citation_builder import CitationBuilder
 from app.rag.context_builder import ContextBuilder
 from app.rag.prompt_builder import PromptBuilder
@@ -84,24 +87,33 @@ class RAGService:
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains restricted information.", 400)
 
         requested_top_k = payload.top_k
-        chunks = await self.retriever.retrieve(
-            query=processed_query,
-            knowledge_base_ids=payload.knowledge_base_ids,
-            top_k=self._retrieval_candidate_top_k(requested_top_k),
-            use_rerank=payload.use_rerank,
-            principal=principal,
-            session_id=session.id,
-        )
+        session_has_documents = self._session_has_documents(session.id)
+        general_knowledge_mode = not payload.knowledge_base_ids and not session_has_documents
+        if general_knowledge_mode:
+            chunks = []
+        else:
+            chunks = await self.retriever.retrieve(
+                query=processed_query,
+                knowledge_base_ids=payload.knowledge_base_ids,
+                top_k=self._retrieval_candidate_top_k(requested_top_k),
+                use_rerank=payload.use_rerank,
+                principal=principal,
+                session_id=session.id,
+            )
         wants_images = self._query_wants_images(processed_query)
         chunks = self._filter_image_chunks_for_query(chunks, wants_images)[:requested_top_k]
-        llmwiki_context = self.llmwiki_service.build_reference_context(
-            query=processed_query,
-            knowledge_base_ids=payload.knowledge_base_ids,
-            principal=principal,
-            max_chars=self._llmwiki_context_char_budget(),
+        llmwiki_context = (
+            ""
+            if general_knowledge_mode
+            else self.llmwiki_service.build_reference_context(
+                query=processed_query,
+                knowledge_base_ids=payload.knowledge_base_ids,
+                principal=principal,
+                max_chars=self._llmwiki_context_char_budget(),
+            )
         )
 
-        if not chunks and not llmwiki_context:
+        if not general_knowledge_mode and not chunks and not llmwiki_context:
             answer = "The available documents do not contain enough information to answer this question."
             self.audit_service.record_message(
                 session=session,
@@ -119,6 +131,9 @@ class RAGService:
                     "request_id": request_id,
                     "knowledge_base_ids": [str(item) for item in payload.knowledge_base_ids],
                     "retrieved_chunks": 0,
+                    "answer_mode": "retrieval_augmented",
+                    "retrieval_skipped": False,
+                    "session_documents_available": session_has_documents,
                 },
                 user_id=user.id,
                 target_type="chat_message",
@@ -171,13 +186,19 @@ class RAGService:
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
-        system_prompt, user_prompt = self.prompt_builder.build(
-            masked_query=processed_query,
-            retrieved_context=context_dlp.text,
-            image_context=image_context_dlp.text,
-            llmwiki_context=llmwiki_context_dlp.text,
-            skill_context=skill_resolution.prompt,
-        )
+        if general_knowledge_mode:
+            system_prompt, user_prompt = self.prompt_builder.build_general_knowledge(
+                masked_query=processed_query,
+                skill_context=skill_resolution.prompt,
+            )
+        else:
+            system_prompt, user_prompt = self.prompt_builder.build(
+                masked_query=processed_query,
+                retrieved_context=context_dlp.text,
+                image_context=image_context_dlp.text,
+                llmwiki_context=llmwiki_context_dlp.text,
+                skill_context=skill_resolution.prompt,
+            )
         tool_traces = []
         if payload.use_tools:
             try:
@@ -249,6 +270,11 @@ class RAGService:
             {
                 "request_id": request_id,
                 "knowledge_base_ids": [str(item) for item in payload.knowledge_base_ids],
+                "answer_mode": (
+                    "general_knowledge" if general_knowledge_mode else "retrieval_augmented"
+                ),
+                "retrieval_skipped": general_knowledge_mode,
+                "session_documents_available": session_has_documents,
                 "retrieved_chunks": len(chunks),
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
@@ -346,23 +372,32 @@ class RAGService:
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains restricted information.", 400)
 
         requested_top_k = payload.top_k
-        chunks = await self.retriever.retrieve(
-            query=processed_query,
-            knowledge_base_ids=payload.knowledge_base_ids,
-            top_k=self._retrieval_candidate_top_k(requested_top_k),
-            use_rerank=payload.use_rerank,
-            principal=principal,
-            session_id=session.id,
-        )
+        session_has_documents = self._session_has_documents(session.id)
+        general_knowledge_mode = not payload.knowledge_base_ids and not session_has_documents
+        if general_knowledge_mode:
+            chunks = []
+        else:
+            chunks = await self.retriever.retrieve(
+                query=processed_query,
+                knowledge_base_ids=payload.knowledge_base_ids,
+                top_k=self._retrieval_candidate_top_k(requested_top_k),
+                use_rerank=payload.use_rerank,
+                principal=principal,
+                session_id=session.id,
+            )
         wants_images = self._query_wants_images(processed_query)
         chunks = self._filter_image_chunks_for_query(chunks, wants_images)[:requested_top_k]
-        llmwiki_context = self.llmwiki_service.build_reference_context(
-            query=processed_query,
-            knowledge_base_ids=payload.knowledge_base_ids,
-            principal=principal,
-            max_chars=self._llmwiki_context_char_budget(),
+        llmwiki_context = (
+            ""
+            if general_knowledge_mode
+            else self.llmwiki_service.build_reference_context(
+                query=processed_query,
+                knowledge_base_ids=payload.knowledge_base_ids,
+                principal=principal,
+                max_chars=self._llmwiki_context_char_budget(),
+            )
         )
-        if not chunks and not llmwiki_context:
+        if not general_knowledge_mode and not chunks and not llmwiki_context:
             answer = "The available documents do not contain enough information to answer this question."
             self.audit_service.record_message(
                 session=session,
@@ -380,6 +415,9 @@ class RAGService:
                     "request_id": request_id,
                     "knowledge_base_ids": [str(item) for item in payload.knowledge_base_ids],
                     "retrieved_chunks": 0,
+                    "answer_mode": "retrieval_augmented",
+                    "retrieval_skipped": False,
+                    "session_documents_available": session_has_documents,
                 },
                 user_id=user.id,
                 target_type="chat_message",
@@ -435,13 +473,19 @@ class RAGService:
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
-        system_prompt, user_prompt = self.prompt_builder.build(
-            masked_query=processed_query,
-            retrieved_context=context_dlp.text,
-            image_context=image_context_dlp.text,
-            llmwiki_context=llmwiki_context_dlp.text,
-            skill_context=skill_resolution.prompt,
-        )
+        if general_knowledge_mode:
+            system_prompt, user_prompt = self.prompt_builder.build_general_knowledge(
+                masked_query=processed_query,
+                skill_context=skill_resolution.prompt,
+            )
+        else:
+            system_prompt, user_prompt = self.prompt_builder.build(
+                masked_query=processed_query,
+                retrieved_context=context_dlp.text,
+                image_context=image_context_dlp.text,
+                llmwiki_context=llmwiki_context_dlp.text,
+                skill_context=skill_resolution.prompt,
+            )
 
         answer_parts: list[str] = []
         tool_traces = []
@@ -549,6 +593,11 @@ class RAGService:
             {
                 "request_id": request_id,
                 "knowledge_base_ids": [str(item) for item in payload.knowledge_base_ids],
+                "answer_mode": (
+                    "general_knowledge" if general_knowledge_mode else "retrieval_augmented"
+                ),
+                "retrieval_skipped": general_knowledge_mode,
+                "session_documents_available": session_has_documents,
                 "retrieved_chunks": len(chunks),
                 "context_chunks": len(used_chunks),
                 "image_count": len(image_models),
@@ -586,6 +635,14 @@ class RAGService:
             tool_calls=tool_traces,
         )
         yield {"event": "done", "response": response}
+
+    def _session_has_documents(self, session_id: UUID) -> bool:
+        if self.db is None:
+            return False
+        document_id = self.db.scalar(
+            select(Document.id).where(Document.session_id == session_id).limit(1)
+        )
+        return document_id is not None
 
     def _retrieval_context_token_budget(self) -> int:
         reserved_tokens = settings.llm_max_tokens + 900
