@@ -1,4 +1,0 @@
-interface:
-  display_name: "Document Analysis"
-  short_description: "Analyze uploaded documents with citations"
-  default_prompt: "Use $document-analysis to analyze the available documents with citations."

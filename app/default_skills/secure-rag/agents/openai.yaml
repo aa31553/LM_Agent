@@ -1,4 +1,0 @@
-interface:
-  display_name: "Secure RAG"
-  short_description: "Answer safely from authorized RAG context"
-  default_prompt: "Use $secure-rag to answer from authorized context without exposing restricted data."
