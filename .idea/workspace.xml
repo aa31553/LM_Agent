@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="e1efd283-5e1b-4e07-acbb-8c916ae58274" name="更改" comment="">
+      <change afterPath="$PROJECT_DIR$/docs/llm_wiki.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/api/v1/router.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/api/v1/router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/core/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/core/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/db/migrations/001_initial_schema.sql" beforeDir="false" afterPath="$PROJECT_DIR$/app/db/migrations/001_initial_schema.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/integrations/embedding_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/integrations/embedding_client.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/rag/prompt_builder.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/rag/prompt_builder.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/rag/retriever.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/rag/retriever.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/repositories/document_repository.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/repositories/document_repository.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/embedding_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/embedding_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/keyword_search_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/keyword_search_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/rag_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/rag_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/services/vector_store_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/services/vector_store_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/app.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/styles.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_openai_compatible_clients.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_openai_compatible_clients.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 8
+}</component>
+  <component name="ProjectId" id="3G2be3TzJAedEvpbVmGi2bdQbcx" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "codex/llmwiki-feature",
+    "ignore.virus.scanning.warn.message": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-abef6180a127-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.26574.109" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="应用程序级" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="e1efd283-5e1b-4e07-acbb-8c916ae58274" name="更改" comment="" />
+      <created>1783172702722</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1783172702722</updated>
+    </task>
+    <servers />
+  </component>
+</project>

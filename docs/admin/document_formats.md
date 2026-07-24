@@ -1,0 +1,60 @@
+# Document Format Administration
+
+## Supported formats
+
+| Category | Extensions | Processing path |
+| --- | --- | --- |
+| PDF | `.pdf` | MarkItDown + PDF parser; local OCR fallback |
+| Image | `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.webp` | Pillow + local OCR |
+| Office OpenXML | `.docx`, `.xlsx`, `.pptx` | MarkItDown + local OpenXML parser |
+| Text | `.txt`, `.md`, `.markdown`, `.log` | Encoding-aware local parser |
+| Structured | `.csv`, `.json`, `.yaml`, `.yml`, `.html`, `.htm`, `.xml` | Safe local parser to Markdown |
+
+Text decoding supports UTF-8, BOM-marked UTF-16, and Traditional Chinese CP950. Structured
+parsers validate malformed input before indexing. HTML ignores script/style content; YAML uses
+safe loading; XML is parsed locally. The original file and normalized Markdown remain separate.
+
+Legacy binary Office files (`.doc`, `.xls`, `.ppt`) are intentionally rejected. Convert them to
+OpenXML first so the server does not require Microsoft Office or LibreOffice automation.
+
+## Single source of truth
+
+The authoritative registry is:
+
+```text
+app/utils/file_utils.py
+└── UPLOAD_TYPE_GROUPS
+```
+
+It drives backend validation and `GET /api/v1/documents/formats`. The frontend reads that API to
+set the file input `accept` value and render its format hint, so extensions are not duplicated in
+JavaScript.
+
+To add another extension to an existing category:
+
+1. Add it to the matching tuple in `UPLOAD_TYPE_GROUPS`.
+2. Confirm the category parser can read it.
+3. Add a parser test and upload/processing test.
+4. Update this compatibility table.
+
+To add a new category:
+
+1. Add the category and extensions to `UPLOAD_TYPE_GROUPS`.
+2. Implement a parser under `app/services/`.
+3. Register it in `DocumentIngestionService._process_document()`.
+4. Normalize output to UTF-8 Markdown, then use the existing chunk/embed/index stages.
+5. Add failure tests for malformed and empty files.
+
+Do not only add an extension to `SUPPORTED_UPLOAD_TYPES`: without a processing dispatch it may be
+accepted at upload and fail later. The category registry and processing dispatch must remain in
+sync.
+
+## Runtime API
+
+```http
+GET /api/v1/documents/formats
+Authorization: Bearer <token>
+```
+
+The response contains each extension/category pair plus a browser-ready `accept` string. API
+clients should read this endpoint instead of maintaining a private hard-coded allowlist.
