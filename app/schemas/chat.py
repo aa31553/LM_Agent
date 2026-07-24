@@ -46,11 +46,26 @@ class MaskedEntity(BaseModel):
     masked_value: str
 
 
+class LLMUsage(BaseModel):
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+class AnswerSections(BaseModel):
+    key_points: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    confidence: str | None = None
+    limitations: list[str] = Field(default_factory=list)
+
+
 class ChatQueryResponse(BaseModel):
     request_id: str
     session_id: UUID
     message_id: UUID
     answer: str
+    sections: AnswerSections = Field(default_factory=AnswerSections)
+    usage: LLMUsage = Field(default_factory=LLMUsage)
     citations: list[Citation] = Field(default_factory=list)
     images: list[ImageReference] = Field(default_factory=list)
     confidence: RiskLevel | str = RiskLevel.INSUFFICIENT
