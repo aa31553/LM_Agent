@@ -471,6 +471,10 @@ Code Chat 使用與一般問答相同的授權檢索、DLP、稽核與 usage 紀
 `code` 為本次問題直接附帶的程式碼，僅供分析，不會在伺服器執行。`knowledge_base_ids`
 仍只會檢索呼叫者具有讀取權限的技術文件。
 
+前端程式助理預設傳送空的 `knowledge_base_ids`，不沿用其他頁面的全域知識庫選擇；
+只有使用者在程式助理內主動選取技術知識庫時才會傳入 ID。空陣列不會停用同一
+Code Session 的暫存文件檢索。
+
 ```json
 {
   "session_id": null,

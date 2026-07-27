@@ -153,3 +153,12 @@ def test_code_chat_routes_are_published_in_openapi(code_client) -> None:
     paths = client.app.openapi()["paths"]
     assert "/api/v1/code-chat/query" in paths
     assert "/api/v1/code-chat/stream" in paths
+
+
+def test_code_assistant_defaults_to_no_permanent_knowledge_base() -> None:
+    source = (Path(__file__).parents[1] / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    assert 'const selectedCodeKbId = codeNode.value;' in source
+    assert '"不使用技術知識庫"' in source
+    assert 'const kbId = $("#codeKbId").value;' in source
+    assert 'const kbId = $("#codeKbId").value || state.selectedKbId;' not in source

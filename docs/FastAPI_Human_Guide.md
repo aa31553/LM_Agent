@@ -203,6 +203,10 @@ Content-Type: application/json
 行號，並可選擇使用者有讀取權限的技術知識庫。回覆會分出診斷、建議修改、風險、
 程式碼區塊及 token usage。
 
+前端預設為「不使用技術知識庫」，不會沿用一般 Chat 或文件頁目前選取的知識庫；
+只有使用者在程式助理內主動選擇後，才會傳送對應的 `knowledge_base_ids`。即使未選
+永久知識庫，同一 Code Session 已上傳並完成索引的暫存檔仍可參與檢索。
+
 可先把 `.py`、`.js`、`.ts`、`.json`、`.md` 等程式或設定檔上傳為 Session 暫存文件：
 
 ```http

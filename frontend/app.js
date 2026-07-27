@@ -156,8 +156,8 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function optionHtml(items, selectedId = "") {
-  const empty = `<option value="">選擇知識庫</option>`;
+function optionHtml(items, selectedId = "", emptyLabel = "選擇知識庫") {
+  const empty = `<option value="">${escapeHtml(emptyLabel)}</option>`;
   return (
     empty +
     items
@@ -392,10 +392,19 @@ async function deleteKbPermission() {
 }
 
 function syncKbSelectors() {
-  ["#uploadKbId", "#chatKbId", "#codeKbId", "#llmwikiKbId"].forEach((selector) => {
+  ["#uploadKbId", "#chatKbId", "#llmwikiKbId"].forEach((selector) => {
     const node = $(selector);
     if (node) node.innerHTML = optionHtml(state.knowledgeBases, state.selectedKbId);
   });
+  const codeNode = $("#codeKbId");
+  if (codeNode) {
+    const selectedCodeKbId = codeNode.value;
+    codeNode.innerHTML = optionHtml(
+      state.knowledgeBases,
+      selectedCodeKbId,
+      "不使用技術知識庫",
+    );
+  }
 }
 
 function renderLLMWiki() {
@@ -1607,7 +1616,7 @@ function renderCodeAssistant() {
         <div class="panel">
           <div class="panel-header"><h2>Code Session</h2><div class="actions"><button id="codeMessagesBtn">紀錄</button><button id="codeDeleteSessionBtn" class="danger">刪除</button></div></div>
           <div class="form-grid"><label class="wide">Session ID<input id="codeSessionIdInput" /></label><label>Top K<input id="codeTopK" type="number" min="1" max="50" value="8" /></label><label class="checkbox-label"><input id="codeUseRerank" type="checkbox" checked /> Rerank</label></div>
-          <p class="helper-text">暫存檔案只會寫入 Code Session，並在刪除 Session 時一併移除。知識庫檢索仍依目前登入者權限過濾。</p>
+          <p class="helper-text">預設不使用永久技術知識庫；只有主動選擇後才會檢索，且仍依目前登入者權限過濾。Code Session 暫存檔案仍可獨立檢索，並在刪除 Session 時一併移除。</p>
         </div>
       </div>
       <div class="panel"><div class="panel-header"><h2>回答</h2></div><div id="codeAnswerOutput" class="answer"></div><div id="codeDiagnosisOutput" class="answer-sections" hidden></div><div id="codeRisksOutput" class="answer-sections" hidden></div><div id="codeBlocksOutput" class="code-blocks" hidden></div><div id="codeUsageOutput" class="usage-summary" hidden></div></div>
@@ -1621,7 +1630,7 @@ function renderCodeAssistant() {
 
 function numberOrNull(value) { return value.trim() ? Number(value) : null; }
 function codeChatPayload() {
-  const kbId = $("#codeKbId").value || state.selectedKbId;
+  const kbId = $("#codeKbId").value;
   const payload = { session_id: $("#codeSessionIdInput").value.trim() || null, knowledge_base_ids: kbId ? [kbId] : [], query: $("#codeQuery").value.trim(), code: $("#codeInput").value || null, language: $("#codeLanguage").value.trim() || null, file_name: $("#codeFileName").value.trim() || null, line_start: numberOrNull($("#codeLineStart").value), line_end: numberOrNull($("#codeLineEnd").value), top_k: Number($("#codeTopK").value || 8), use_rerank: $("#codeUseRerank").checked, use_masking: true, use_tools: false };
   if (!payload.query) throw new Error("請輸入程式碼問題"); return payload;
 }
