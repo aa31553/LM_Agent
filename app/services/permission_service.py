@@ -11,16 +11,16 @@ from app.core.constants import (
 )
 from app.core.exceptions import APIError
 from app.core.security import Principal
-from app.models.document import Document
 from app.models.chat import ChatSession
+from app.models.document import Document
 from app.models.knowledge_base import KnowledgeBase
 from app.models.permission import DocumentPermission, KnowledgeBasePermission
 from app.repositories.permission_repository import (
     DocumentPermissionRepository,
     KnowledgeBasePermissionRepository,
 )
-from app.services.audit_service import AuditService
 from app.repositories.user_repository import UserRepository
+from app.services.audit_service import AuditService
 
 
 class PermissionService:
@@ -51,20 +51,21 @@ class PermissionService:
             user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
             session = self.db.get(ChatSession, document.session_id)
             return user is not None and session is not None and session.user_id == user.id
-        if not self.can_access_level(principal, ConfidentialLevel(document.confidential_level)):
-            return False
-        if document.department and principal.department == document.department:
-            return True
         if self.db is None:
-            return True
+            return self.can_access_level(principal, ConfidentialLevel(document.confidential_level))
         if document.knowledge_base_id is None:
             return False
-        if not self._kb_permissions_allow(principal, document.knowledge_base_id):
+        knowledge_base = self.db.get(KnowledgeBase, document.knowledge_base_id)
+        if knowledge_base is None or not self.can_access_knowledge_base(principal, knowledge_base):
+            return False
+        if not self.can_access_level(principal, ConfidentialLevel(document.confidential_level)):
             return False
         document_permissions = DocumentPermissionRepository(self.db).list_for_document(document.id)
-        if not document_permissions:
+        if document.department and principal.department == document.department:
             return True
-        return self._permissions_allow(principal, document_permissions)
+        if document_permissions:
+            return self._permissions_allow(principal, document_permissions, PermissionLevel.READ)
+        return document.department is None
 
     def ensure_document_read(self, principal: Principal, document: Document) -> None:
         if not self.can_read_document(principal, document):
@@ -84,6 +85,12 @@ class PermissionService:
             return False
         if "admin" in principal.roles:
             return True
+        if not knowledge_base.is_active:
+            return False
+        if self.db is not None:
+            user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
+            if user is not None and knowledge_base.created_by == user.id:
+                return True
         if knowledge_base.owner_department and principal.department == knowledge_base.owner_department:
             return True
         if self.db is None:
@@ -93,7 +100,97 @@ class PermissionService:
         )
         if not permissions:
             return True
-        return self._permissions_allow(principal, permissions)
+        return self._permissions_allow(principal, permissions, PermissionLevel.READ)
+
+    def ensure_knowledge_base_read(self, principal: Principal, knowledge_base: KnowledgeBase) -> None:
+        if not self.can_access_knowledge_base(principal, knowledge_base):
+            raise APIError(ErrorCode.PERMISSION_DENIED, "User does not have access to this knowledge base.", 403)
+
+    def can_write_knowledge_base(self, principal: Principal, knowledge_base: KnowledgeBase) -> bool:
+        if not principal.is_active:
+            return False
+        if "admin" in principal.roles:
+            return True
+        if self.db is None:
+            return False
+        user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
+        if user is not None and knowledge_base.created_by == user.id:
+            return True
+        permissions = KnowledgeBasePermissionRepository(self.db).list_for_knowledge_base(
+            knowledge_base.id
+        )
+        return self._permissions_allow(principal, permissions, PermissionLevel.WRITE)
+
+    def ensure_knowledge_base_write(self, principal: Principal, knowledge_base: KnowledgeBase) -> None:
+        if not self.can_write_knowledge_base(principal, knowledge_base):
+            raise APIError(ErrorCode.PERMISSION_DENIED, "Write permission is required for this knowledge base.", 403)
+
+    def can_manage_knowledge_base(self, principal: Principal, knowledge_base: KnowledgeBase) -> bool:
+        if not principal.is_active:
+            return False
+        if "admin" in principal.roles:
+            return True
+        if self.db is None:
+            return False
+        user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
+        if user is not None and knowledge_base.created_by == user.id:
+            return True
+        permissions = KnowledgeBasePermissionRepository(self.db).list_for_knowledge_base(
+            knowledge_base.id
+        )
+        return self._permissions_allow(principal, permissions, PermissionLevel.ADMIN)
+
+    def ensure_knowledge_base_manage(self, principal: Principal, knowledge_base: KnowledgeBase) -> None:
+        if not self.can_manage_knowledge_base(principal, knowledge_base):
+            raise APIError(ErrorCode.PERMISSION_DENIED, "Knowledge base administrator permission is required.", 403)
+
+    def can_write_document(self, principal: Principal, document: Document) -> bool:
+        if not principal.is_active:
+            return False
+        if "admin" in principal.roles:
+            return True
+        if self.db is None:
+            return False
+        user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
+        if user is not None and document.created_by == user.id:
+            return True
+        if document.session_id is not None:
+            session = self.db.get(ChatSession, document.session_id)
+            return user is not None and session is not None and session.user_id == user.id
+        if document.knowledge_base_id is None:
+            return False
+        knowledge_base = self.db.get(KnowledgeBase, document.knowledge_base_id)
+        if knowledge_base is None or not knowledge_base.is_active:
+            return False
+        if self.can_write_knowledge_base(principal, knowledge_base):
+            return True
+        return self._permissions_allow(
+            principal,
+            DocumentPermissionRepository(self.db).list_for_document(document.id),
+            PermissionLevel.WRITE,
+        )
+
+    def ensure_document_write(self, principal: Principal, document: Document) -> None:
+        if not self.can_write_document(principal, document):
+            raise APIError(ErrorCode.PERMISSION_DENIED, "Write permission is required for this document.", 403)
+
+    def can_manage_document(self, principal: Principal, document: Document) -> bool:
+        if "admin" in principal.roles:
+            return True
+        if self.db is None or document.knowledge_base_id is None:
+            return False
+        knowledge_base = self.db.get(KnowledgeBase, document.knowledge_base_id)
+        if knowledge_base is not None and self.can_manage_knowledge_base(principal, knowledge_base):
+            return True
+        return self._permissions_allow(
+            principal,
+            DocumentPermissionRepository(self.db).list_for_document(document.id),
+            PermissionLevel.ADMIN,
+        )
+
+    def ensure_document_manage(self, principal: Principal, document: Document) -> None:
+        if not self.can_manage_document(principal, document):
+            raise APIError(ErrorCode.PERMISSION_DENIED, "Document administrator permission is required.", 403)
 
     def create_or_update_document_permission(
         self,
@@ -177,21 +274,19 @@ class PermissionService:
         if deleted == 0:
             raise APIError(ErrorCode.INVALID_REQUEST, "Knowledge base permission not found.", 404)
 
-    def _kb_permissions_allow(self, principal: Principal, knowledge_base_id: UUID) -> bool:
-        permissions = KnowledgeBasePermissionRepository(self.db).list_for_knowledge_base(
-            knowledge_base_id
-        )
-        if not permissions:
-            return True
-        return self._permissions_allow(principal, permissions)
-
     def _permissions_allow(
         self,
         principal: Principal,
         permissions: list[DocumentPermission] | list[KnowledgeBasePermission],
+        required: PermissionLevel,
     ) -> bool:
+        allowed_levels = {
+            PermissionLevel.READ: {PermissionLevel.READ.value, PermissionLevel.WRITE.value, PermissionLevel.ADMIN.value},
+            PermissionLevel.WRITE: {PermissionLevel.WRITE.value, PermissionLevel.ADMIN.value},
+            PermissionLevel.ADMIN: {PermissionLevel.ADMIN.value},
+        }[required]
         for permission in permissions:
-            if permission.permission not in {PermissionLevel.READ.value, PermissionLevel.ADMIN.value}:
+            if permission.permission not in allowed_levels:
                 continue
             if permission.subject_type == PermissionSubjectType.USER.value:
                 if permission.subject_value == principal.external_user_id:

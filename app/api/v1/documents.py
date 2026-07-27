@@ -1,13 +1,15 @@
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
+from fastapi import status as http_status
 from sqlalchemy.orm import Session
 
 from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
+from app.models.knowledge_base import KnowledgeBase
 from app.repositories.document_repository import DocumentRepository
 from app.schemas.common import PageResponse
 from app.schemas.document import (
@@ -17,6 +19,7 @@ from app.schemas.document import (
     DocumentFormatsResponse,
     DocumentListItem,
     DocumentStatusResponse,
+    DocumentUpdate,
     DocumentUploadResponse,
     ReindexResponse,
 )
@@ -80,22 +83,30 @@ async def list_documents(
 ) -> PageResponse[DocumentListItem]:
     repository = DocumentRepository(db)
     permission_service = PermissionService(db)
-    documents = repository.list(
+    if knowledge_base_id is not None:
+        knowledge_base = db.get(KnowledgeBase, knowledge_base_id)
+        if knowledge_base is None:
+            raise APIError(ErrorCode.INVALID_REQUEST, "Knowledge base not found.", 404)
+        permission_service.ensure_knowledge_base_read(principal, knowledge_base)
+    documents = repository.list_all(
         knowledge_base_id=knowledge_base_id,
         status=status,
         confidential_level=confidential_level.value if confidential_level else None,
-        limit=page_size,
-        offset=(page - 1) * page_size,
     )
     allowed_documents = [
         document for document in documents if permission_service.can_read_document(principal, document)
     ]
-    items = [DocumentIngestionService(db=db).list_item(document) for document in allowed_documents]
+    total = len(allowed_documents)
+    start = (page - 1) * page_size
+    items = [
+        DocumentIngestionService(db=db).list_item(document)
+        for document in allowed_documents[start : start + page_size]
+    ]
     return PageResponse(
         items=items,
         page=page,
         page_size=page_size,
-        total=len(allowed_documents),
+        total=total,
     )
 
 
@@ -123,6 +134,22 @@ async def get_document(
     return service.detail_from_document(document)
 
 
+@router.patch("/{document_id}", response_model=DocumentDetail)
+async def update_document(
+    document_id: UUID,
+    payload: DocumentUpdate,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DocumentDetail:
+    service = DocumentIngestionService(db=db)
+    document = service.get_document_model(document_id)
+    permission_service = PermissionService(db)
+    permission_service.ensure_document_write(principal, document)
+    if payload.confidential_level is not None:
+        permission_service.ensure_level_access(principal, payload.confidential_level)
+    return service.detail_from_document(service.update_metadata(document_id, payload))
+
+
 @router.post("/{document_id}/reindex", response_model=ReindexResponse)
 async def reindex_document(
     document_id: UUID,
@@ -130,9 +157,8 @@ async def reindex_document(
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> ReindexResponse:
-    if "admin" not in principal.roles:
-        raise APIError(ErrorCode.PERMISSION_DENIED, "Admin role is required.", status_code=403)
     document = DocumentIngestionService(db=db).get_document_model(document_id)
+    PermissionService(db).ensure_document_write(principal, document)
     if document.status == DocumentStatus.ARCHIVED.value:
         raise APIError(ErrorCode.INVALID_REQUEST, "Archived documents cannot be reindexed.", 400)
     if not Path(document.file_path).exists():
@@ -160,6 +186,20 @@ async def archive_document(
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> DocumentArchiveResponse:
-    if "admin" not in principal.roles:
-        raise APIError(ErrorCode.PERMISSION_DENIED, "Admin role is required.", status_code=403)
-    return DocumentIngestionService(db=db).archive(document_id)
+    service = DocumentIngestionService(db=db)
+    document = service.get_document_model(document_id)
+    PermissionService(db).ensure_document_write(principal, document)
+    return service.archive(document_id)
+
+
+@router.delete("/{document_id}", status_code=http_status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    document_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> Response:
+    service = DocumentIngestionService(db=db)
+    document = service.get_document_model(document_id)
+    PermissionService(db).ensure_document_manage(principal, document)
+    service.delete(document_id)
+    return Response(status_code=http_status.HTTP_204_NO_CONTENT)

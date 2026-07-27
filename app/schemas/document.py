@@ -75,6 +75,15 @@ class DocumentDetail(BaseModel):
     updated_at: datetime
 
 
+class DocumentUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    language: str | None = Field(default=None, max_length=16)
+    confidential_level: ConfidentialLevel | None = None
+    department: str | None = Field(default=None, max_length=255)
+    source_type: str | None = Field(default=None, max_length=64)
+    version: str | None = Field(default=None, max_length=255)
+
+
 class DocumentArchiveResponse(BaseModel):
     document_id: UUID
     status: DocumentStatus

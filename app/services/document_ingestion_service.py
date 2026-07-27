@@ -5,35 +5,40 @@ from uuid import UUID, uuid4
 
 from fastapi import UploadFile
 from PIL import Image
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal
+from app.models.audit import AuditEvent
 from app.models.chat import ChatSession
-from app.models.document import Document
+from app.models.document import Document, DocumentProcessingJob
 from app.models.document_chunk import DocumentChunk
 from app.models.document_image import DocumentImage
 from app.models.knowledge_base import KnowledgeBase
+from app.models.permission import DocumentPermission
 from app.repositories.chunk_repository import ChunkRepository
-from app.repositories.document_repository import DocumentRepository
 from app.repositories.document_image_repository import DocumentImageRepository
+from app.repositories.document_repository import DocumentRepository
 from app.schemas.document import (
     DocumentArchiveResponse,
     DocumentDetail,
     DocumentListItem,
     DocumentStatusResponse,
+    DocumentUpdate,
     DocumentUploadResponse,
     ReindexResponse,
 )
-from app.services.chunking_service import ChunkingService, TextChunk
 from app.services.audit_service import AuditService
+from app.services.chunking_service import ChunkingService, TextChunk
 from app.services.embedding_service import EmbeddingService
 from app.services.image_ocr_service import ImageOCRService, OCRUnavailableError
 from app.services.markdown_conversion_service import MarkdownConversionService
 from app.services.office_parser_service import OfficeParserService
-from app.services.pdf_parser_service import PDFParserService
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
+from app.services.pdf_parser_service import PDFParserService
+from app.services.permission_service import PermissionService
 from app.services.processing_queue_service import ProcessingQueueService
 from app.services.text_document_parser_service import TextDocumentParserService
 from app.storage.local_storage import LocalStorage
@@ -45,7 +50,6 @@ from app.utils.file_utils import (
 )
 from app.utils.language_detector import detect_language
 from app.utils.text_utils import clean_db_text
-
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +100,8 @@ class DocumentIngestionService:
                 "Unsupported document type. Call GET /api/v1/documents/formats for the supported extensions.",
                 400,
             )
+
+        PermissionService(self.db).ensure_level_access(principal, confidential_level)
 
         knowledge_base_id, session_id, created_by = self._resolve_upload_scope(
             scope=scope,
@@ -315,6 +321,63 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
         return DocumentArchiveResponse(document_id=document_id, status=DocumentStatus.ARCHIVED)
+
+    def update_metadata(self, document_id: UUID, payload: DocumentUpdate) -> Document:
+        document = self._get_document(document_id)
+        for field, value in payload.model_dump(exclude_unset=True).items():
+            if field == "confidential_level" and value is not None:
+                value = value.value
+            setattr(document, field, value)
+        document.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(document)
+        return document
+
+    def delete(self, document_id: UUID) -> int:
+        """Permanently remove one document, its derived data, jobs and stored artifacts."""
+        document = self._get_document(document_id)
+        image_paths = list(
+            self.db.scalars(
+                select(DocumentImage.image_path).where(DocumentImage.document_id == document.id)
+            )
+        )
+        artifact_paths = [
+            path for path in (document.file_path, document.markdown_path, *image_paths) if path
+        ]
+        self.db.execute(delete(AuditEvent).where(
+            AuditEvent.target_type == "document", AuditEvent.target_id == document.id
+        ))
+        self.db.execute(delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document.id))
+        self.db.execute(delete(DocumentPermission).where(DocumentPermission.document_id == document.id))
+        self.db.execute(delete(DocumentImage).where(DocumentImage.document_id == document.id))
+        self.db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
+        self.db.delete(document)
+        self.db.commit()
+        return sum(self._delete_artifact(path) for path in artifact_paths)
+
+    def _delete_artifact(self, raw_path: str) -> int:
+        path = Path(raw_path).resolve()
+        allowed_roots = [
+            self.storage.root.resolve(),
+            Path("data/extracted_images").resolve(),
+        ]
+        if not any(path.is_relative_to(root) for root in allowed_roots) or not path.is_file():
+            return 0
+        try:
+            path.unlink()
+        except OSError:
+            return 0
+        for root in allowed_roots:
+            if path.is_relative_to(root):
+                parent = path.parent
+                while parent != root and parent.is_dir():
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    parent = parent.parent
+                break
+        return 1
 
     def list_item(self, document: Document) -> DocumentListItem:
         return DocumentListItem(
@@ -755,9 +818,14 @@ class DocumentIngestionService:
     def get_document_model(self, document_id: UUID) -> Document:
         return self._get_document(document_id)
 
-    def _ensure_knowledge_base_exists(self, knowledge_base_id: UUID) -> None:
-        if self.db.get(KnowledgeBase, knowledge_base_id) is None:
+    def _get_knowledge_base(self, knowledge_base_id: UUID) -> KnowledgeBase:
+        knowledge_base = self.db.get(KnowledgeBase, knowledge_base_id)
+        if knowledge_base is None:
             raise APIError(ErrorCode.INVALID_REQUEST, "Knowledge base not found.", 400)
+        return knowledge_base
+
+    def _ensure_knowledge_base_exists(self, knowledge_base_id: UUID) -> None:
+        self._get_knowledge_base(knowledge_base_id)
 
     def _resolve_upload_scope(
         self,
@@ -777,7 +845,8 @@ class DocumentIngestionService:
                     "knowledge_base scope requires knowledge_base_id and forbids session_id.",
                     400,
                 )
-            self._ensure_knowledge_base_exists(knowledge_base_id)
+            knowledge_base = self._get_knowledge_base(knowledge_base_id)
+            PermissionService(self.db).ensure_knowledge_base_write(principal, knowledge_base)
             return knowledge_base_id, None, user.id
 
         if knowledge_base_id is not None:
