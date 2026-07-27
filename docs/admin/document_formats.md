@@ -4,7 +4,7 @@
 
 | Category | Extensions | Processing path |
 | --- | --- | --- |
-| PDF | `.pdf` | MarkItDown + PDF parser; local OCR fallback |
+| PDF | `.pdf` | Isolated `pypdf` text extraction; full OCR only when no text is found. Embedded image extraction/OCR is opt-in and bounded. |
 | Image | `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.webp` | Pillow + local OCR |
 | Office OpenXML | `.docx`, `.xlsx`, `.pptx` | MarkItDown + local OpenXML parser |
 | Text | `.txt`, `.md`, `.markdown`, `.log` | Encoding-aware local parser |
@@ -13,6 +13,12 @@
 Text decoding supports UTF-8, BOM-marked UTF-16, and Traditional Chinese CP950. Structured
 parsers validate malformed input before indexing. HTML ignores script/style content; YAML uses
 safe loading; XML is parsed locally. The original file and normalized Markdown remain separate.
+
+PDF work is never performed by the API/Uvicorn process. Start
+`python -m app.workers.document_tasks` independently. The defaults reject files above 50 MB or
+200 pages, record a 20-second per-page ceiling, and terminate the whole PDF child after 10
+minutes. `PDF_IMAGE_EXTRACTION_ENABLED` and `PDF_IMAGE_OCR_ENABLED` default to `false`; when
+enabled, `PDF_IMAGE_MAX_PAGES`, `PDF_IMAGE_MAX_COUNT`, and `PDF_IMAGE_OCR_MAX_COUNT` bound work.
 
 Legacy binary Office files (`.doc`, `.xls`, `.ppt`) are intentionally rejected. Convert them to
 OpenXML first so the server does not require Microsoft Office or LibreOffice automation.

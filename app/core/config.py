@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.6.0"
+    app_version: str = "0.7.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -66,9 +66,19 @@ class Settings(BaseSettings):
     health_dependency_timeout_seconds: float = Field(default=2.0, gt=0)
 
     worker_poll_interval_seconds: float = Field(default=2.0, gt=0)
-    worker_job_timeout_seconds: int = Field(default=300, ge=1)
+    worker_job_timeout_seconds: int = Field(default=900, ge=1)
     worker_retry_attempts: int = Field(default=2, ge=1)
-    embedded_document_worker_enabled: bool = True
+    document_max_upload_bytes: int = Field(default=100_000_000, ge=1)
+    pdf_max_file_bytes: int = Field(default=50_000_000, ge=1)
+    pdf_max_pages: int = Field(default=200, ge=1)
+    pdf_page_timeout_seconds: float = Field(default=20.0, gt=0)
+    pdf_job_timeout_seconds: int = Field(default=600, ge=1)
+    pdf_ocr_enabled: bool = True
+    pdf_image_extraction_enabled: bool = False
+    pdf_image_max_pages: int = Field(default=20, ge=0)
+    pdf_image_max_count: int = Field(default=50, ge=0)
+    pdf_image_ocr_enabled: bool = False
+    pdf_image_ocr_max_count: int = Field(default=10, ge=0)
 
 
 @lru_cache

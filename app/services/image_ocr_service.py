@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,9 @@ class ImageOCRService:
         return True
 
     async def run_ocr(self, file_path: str) -> OCRResult:
+        return await asyncio.to_thread(self.run_ocr_sync, file_path)
+
+    def run_ocr_sync(self, file_path: str) -> OCRResult:
         if self._rapidocr_available():
             return self._run_rapidocr(file_path)
 
@@ -46,8 +50,16 @@ class ImageOCRService:
         return self._result_from_tesseract_data(data)
 
     async def run_pdf_ocr(self, file_path: str, scale: float = 2.0) -> ParsedDocument:
+        return await asyncio.to_thread(self.run_pdf_ocr_sync, file_path, scale)
+
+    def run_pdf_ocr_sync(
+        self,
+        file_path: str,
+        scale: float = 2.0,
+        max_pages: int | None = None,
+    ) -> ParsedDocument:
         if self._rapidocr_available():
-            return await self._run_pdf_rapidocr(file_path, scale)
+            return self._run_pdf_rapidocr_sync(file_path, scale, max_pages=max_pages)
 
         self._ensure_tesseract_runtime()
         import pypdfium2 as pdfium
@@ -59,7 +71,10 @@ class ImageOCRService:
 
         with TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            for index in range(len(pdf)):
+            page_total = len(pdf)
+            if max_pages is not None and page_total > max_pages:
+                raise ValueError(f"PDF has {page_total} pages; limit is {max_pages} pages.")
+            for index in range(page_total):
                 page = pdf[index]
                 bitmap = page.render(scale=scale)
                 image = bitmap.to_pil()
@@ -81,14 +96,20 @@ class ImageOCRService:
         ocr_required = not any(page.text for page in pages)
         return ParsedDocument(
             pages=pages,
-            page_count=len(pdf),
+            page_count=page_total,
             ocr_required=ocr_required,
             ocr_confidence=(
                 sum(confidences) / len(confidences) if confidences else None
             ),
         )
 
-    async def _run_pdf_rapidocr(self, file_path: str, scale: float) -> ParsedDocument:
+    def _run_pdf_rapidocr_sync(
+        self,
+        file_path: str,
+        scale: float,
+        *,
+        max_pages: int | None = None,
+    ) -> ParsedDocument:
         import pypdfium2 as pdfium
 
         pdf = pdfium.PdfDocument(file_path)
@@ -97,7 +118,10 @@ class ImageOCRService:
 
         with TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            for index in range(len(pdf)):
+            page_total = len(pdf)
+            if max_pages is not None and page_total > max_pages:
+                raise ValueError(f"PDF has {page_total} pages; limit is {max_pages} pages.")
+            for index in range(page_total):
                 page = pdf[index]
                 bitmap = page.render(scale=scale)
                 image = bitmap.to_pil()
@@ -117,7 +141,7 @@ class ImageOCRService:
 
         return ParsedDocument(
             pages=pages,
-            page_count=len(pdf),
+            page_count=page_total,
             ocr_required=not any(page.text for page in pages),
             ocr_confidence=sum(confidences) / len(confidences) if confidences else None,
         )

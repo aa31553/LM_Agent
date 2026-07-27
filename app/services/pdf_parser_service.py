@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+import asyncio
 import re
+from dataclasses import dataclass
 
 from pypdf import PdfReader
 
@@ -30,15 +31,18 @@ class ParsedDocument:
 
 class PDFParserService:
     async def parse(self, file_path: str) -> ParsedDocument:
+        """Compatibility entry point for callers outside the document worker."""
+        return await asyncio.to_thread(self.parse_sync, file_path)
+
+    def parse_sync(self, file_path: str) -> ParsedDocument:
         reader = PdfReader(file_path)
         pages: list[ParsedPage] = []
         for index, page in enumerate(reader.pages, start=1):
-            plain_text = page.extract_text(extraction_mode="plain") or ""
             try:
-                layout_text = page.extract_text(extraction_mode="layout") or plain_text
+                layout_text = page.extract_text(extraction_mode="layout") or ""
             except TypeError:
-                layout_text = plain_text
-            normalized = self._normalize_text(layout_text or plain_text)
+                layout_text = page.extract_text() or ""
+            normalized = self._normalize_text(layout_text)
             pages.append(
                 ParsedPage(
                     page_number=index,

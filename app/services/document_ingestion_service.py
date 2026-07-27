@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from PIL import Image
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.constants import ChatType, ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal
@@ -38,6 +40,11 @@ from app.services.markdown_conversion_service import MarkdownConversionService
 from app.services.office_parser_service import OfficeParserService
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
 from app.services.pdf_parser_service import PDFParserService
+from app.services.pdf_processing_service import (
+    PDFProcessingResult,
+    ProcessedPDFImage,
+    process_pdf_file,
+)
 from app.services.permission_service import PermissionService
 from app.services.processing_queue_service import ProcessingQueueService
 from app.services.text_document_parser_service import TextDocumentParserService
@@ -50,6 +57,7 @@ from app.utils.file_utils import (
 )
 from app.utils.language_detector import detect_language
 from app.utils.text_utils import clean_db_text
+from app.workers.process_runner import run_in_process
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +120,7 @@ class DocumentIngestionService:
             principal=principal,
             title_seed=file.filename,
         )
-        content = await file.read()
+        content = await self._read_upload_content(file, original_filename=file.filename)
         document = await self.create_uploaded_document(
             content=content,
             original_filename=file.filename,
@@ -246,6 +254,34 @@ class DocumentIngestionService:
         self.db.commit()
         self.db.refresh(document)
         return document
+
+    async def _read_upload_content(self, file: UploadFile, *, original_filename: str) -> bytes:
+        """Read uploads with a hard limit instead of buffering unbounded request data."""
+
+        file_type = infer_file_type(original_filename)
+        limit = settings.pdf_max_file_bytes if file_type == "pdf" else settings.document_max_upload_bytes
+        declared_size = getattr(file, "size", None)
+        if declared_size is not None and declared_size > limit:
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                f"Upload is {declared_size} bytes; limit for this file type is {limit} bytes.",
+                413,
+            )
+        parts: list[bytes] = []
+        received = 0
+        while True:
+            part = await file.read(1024 * 1024)
+            if not part:
+                break
+            received += len(part)
+            if received > limit:
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    f"Upload exceeds the {limit}-byte limit for this file type.",
+                    413,
+                )
+            parts.append(part)
+        return b"".join(parts)
 
     def status(self, document_id: UUID) -> DocumentStatusResponse:
         document = self._get_document(document_id)
@@ -456,50 +492,36 @@ class DocumentIngestionService:
         document.ocr_confidence = None
         document.updated_at = datetime.utcnow()
         self.db.commit()
+        self._delete_extracted_image_directory(document.id)
 
     async def _process_pdf_document(self, document: Document) -> None:
         document.status = DocumentStatus.PARSING.value
         document.updated_at = datetime.utcnow()
         self.db.commit()
 
-        converted_markdown = await self.markdown_converter.convert_local(document.file_path)
-        parsed = await self.pdf_parser.parse(document.file_path)
+        result = await self._run_pdf_processing(document)
+        parsed = result.parsed
         document.page_count = parsed.page_count
-        document.ocr_required = parsed.ocr_required
-
-        if parsed.ocr_required:
-            document.status = DocumentStatus.OCR_PROCESSING.value
+        document.ocr_required = result.used_pdf_ocr or parsed.ocr_required
+        document.ocr_confidence = parsed.ocr_confidence
+        if parsed.ocr_required and not result.used_pdf_ocr:
+            document.status = DocumentStatus.FAILED.value
+            document.error_message = (
+                "PDF contains no extractable text and PDF OCR is disabled. "
+                "Enable PDF_OCR_ENABLED to process scanned PDFs."
+            )
             document.updated_at = datetime.utcnow()
             self.db.commit()
-            try:
-                parsed = await self.ocr_service.run_pdf_ocr(document.file_path)
-            except OCRUnavailableError as exc:
-                document.status = DocumentStatus.FAILED.value
-                document.error_message = (
-                    "PDF contains no extractable text and requires OCR, "
-                    f"but OCR runtime is unavailable: {exc}"
-                )
-                document.updated_at = datetime.utcnow()
-                self.db.commit()
-                return
-            document.page_count = parsed.page_count
-            document.ocr_confidence = parsed.ocr_confidence
-            document.ocr_required = parsed.ocr_required
-            converted_markdown = self.markdown_converter.from_extracted_text(
-                document.title,
-                parsed.text,
-            )
+            return
 
-        image_models = await self.image_extraction_service.extract(document, parsed)
+        image_models = self._document_images_from_pdf_result(document, result.images)
         if image_models:
             DocumentImageRepository(self.db).add_many(image_models)
             self.db.flush()
 
-        if not converted_markdown.strip() and parsed.text.strip():
-            converted_markdown = self.markdown_converter.from_extracted_text(
-                document.title,
-                parsed.text,
-            )
+        # Do not call MarkItDown for PDFs here: it would reopen the same file after
+        # pypdf has already supplied the normalized text used by image extraction.
+        converted_markdown = self.markdown_converter.from_extracted_text(document.title, parsed.text)
         converted_markdown = self._append_image_markdown(converted_markdown, image_models)
         if not converted_markdown.strip():
             document.status = DocumentStatus.FAILED.value
@@ -538,6 +560,69 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(document)
+
+    async def _run_pdf_processing(self, document: Document) -> PDFProcessingResult:
+        # Leave a small margin so the outer QueueWorker timeout never abandons a
+        # still-running child process.  The child is forcibly terminated on expiry.
+        timeout_seconds = min(
+            settings.pdf_job_timeout_seconds,
+            max(1, settings.worker_job_timeout_seconds - 5),
+        )
+        return await asyncio.to_thread(
+            run_in_process,
+            process_pdf_file,
+            timeout_seconds=timeout_seconds,
+            kwargs={
+                "file_path": document.file_path,
+                "document_id": str(document.id),
+                "image_root": str(self.image_extraction_service.image_root),
+                "max_file_bytes": settings.pdf_max_file_bytes,
+                "max_pages": settings.pdf_max_pages,
+                "page_timeout_seconds": settings.pdf_page_timeout_seconds,
+                "enable_pdf_ocr": settings.pdf_ocr_enabled,
+                "enable_image_extraction": settings.pdf_image_extraction_enabled,
+                "image_max_pages": settings.pdf_image_max_pages,
+                "image_max_count": settings.pdf_image_max_count,
+                "enable_image_ocr": settings.pdf_image_ocr_enabled,
+                "image_ocr_max_count": settings.pdf_image_ocr_max_count,
+            },
+        )
+
+    def _document_images_from_pdf_result(
+        self,
+        document: Document,
+        images: list[ProcessedPDFImage],
+    ) -> list[DocumentImage]:
+        return [
+            DocumentImage(
+                id=uuid4(),
+                document_id=document.id,
+                knowledge_base_id=document.knowledge_base_id,
+                page_number=image.page_number,
+                image_index=image.image_index,
+                caption=image.caption,
+                image_path=image.image_path,
+                mime_type=image.mime_type,
+                width=image.width,
+                height=image.height,
+                ocr_text=clean_db_text(image.ocr_text),
+                extraction_method=image.extraction_method,
+                image_metadata=image.metadata,
+            )
+            for image in images
+        ]
+
+    def _delete_extracted_image_directory(self, document_id: UUID) -> None:
+        image_root = self.image_extraction_service.image_root.resolve()
+        directory = (image_root / str(document_id)).resolve()
+        if not directory.is_relative_to(image_root) or not directory.is_dir():
+            return
+        for path in sorted(directory.rglob("*"), reverse=True):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+            elif path.is_dir():
+                path.rmdir()
+        directory.rmdir()
 
     async def _process_office_document(self, document: Document) -> None:
         document.status = DocumentStatus.PARSING.value

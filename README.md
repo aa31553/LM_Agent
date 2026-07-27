@@ -101,6 +101,20 @@ Run the API:
 uvicorn app.main:app --reload
 ```
 
+Run document processing in a separate terminal or Windows service. The API only
+stores uploads, creates queue jobs, and returns job/document status; it never parses
+PDFs or runs OCR in the Uvicorn process:
+
+```bash
+python -m app.workers.document_tasks
+```
+
+PDF processing is process-isolated. By default it rejects PDFs over 50 MB or 200
+pages, applies a 20-second per-page check and a 10-minute killable job timeout.
+Full-document OCR runs only when no PDF text is extractable. Embedded-image extraction
+and image OCR are disabled by default and can be explicitly enabled with the
+`PDF_IMAGE_*` environment variables in `.env.example`.
+
 For an internal OpenAI-compatible LLM service, configure the server address and
 chat-completions path separately:
 
@@ -346,8 +360,10 @@ See [Skills administration](docs/admin/skills.md) for the API and storage contra
 
 ## Document Processing
 
-Every supported upload is normalized through Microsoft MarkItDown before indexing. The
-original artifact and its generated Markdown are retained separately:
+Office and image uploads are normalized through Microsoft MarkItDown before indexing.
+PDF uploads use one process-isolated `pypdf` pass for text and optional embedded-image
+extraction so the same PDF is not reopened by multiple parsers. The original artifact and
+its generated Markdown are retained separately:
 
 ```text
 LOCAL_STORAGE_ROOT/
@@ -358,13 +374,29 @@ LOCAL_STORAGE_ROOT/
 Processing flow:
 
 ```text
-PDF / Office / Image Upload
+PDF Upload
+  ->
+Save Original Artifact
+  ->
+Separate document worker + killable PDF subprocess
+  ->
+Extract text and optional embedded images from one PdfReader
+  ->
+OCR only when no PDF text is extractable
+  ->
+Save Markdown Artifact
+  ->
+Chunk / Embed / Store
+```
+
+```text
+Office / Image Upload
   ->
 Save Original Artifact
   ->
 MarkItDown convert_local()
   ->
-OCR fallback for scanned PDFs and images
+OCR fallback for images
   ->
 Save Markdown Artifact
   ->

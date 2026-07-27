@@ -51,6 +51,10 @@ Return Answer
 ```text
 PDF Upload
   ↓
+API stores upload and creates a queue job
+  ↓
+Independent document worker starts a killable PDF subprocess
+  ↓
 Extract Metadata
   ↓
 Check Text Extractability
@@ -73,6 +77,12 @@ Embed Chunks
   ↓
 Store Chunks and Vectors
 ```
+
+The default PDF boundary is 50 MB, 200 pages, a 20-second per-page extraction check, and a
+10-minute whole-job timeout. Any limit failure marks both the document and its processing job
+as `failed`. Embedded-image extraction and embedded-image OCR are disabled by default; when
+enabled, their page/image limits are configured independently. Text extraction and optional
+embedded-image extraction share one `PdfReader` pass.
 
 ---
 

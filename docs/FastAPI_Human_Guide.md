@@ -1,7 +1,7 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/llmwiki-feature`  
-> API 版本：`0.6.0`
+> API 版本：`0.7.0`
 > 更新日期：2026-07-27
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。若要讓 LLM / Agent 解析 API 契約，請改讀 [FastAPI LLM Reference](FastAPI_LLM_Reference.md)。執行中的欄位與 schema 最終仍以 `GET /openapi.json` 為準。
@@ -24,6 +24,17 @@
 ```bash
 uvicorn app.main:app --reload
 ```
+
+文件工作者必須以另一個行程啟動（Windows 可將它註冊為獨立服務）：
+
+```bash
+python -m app.workers.document_tasks
+```
+
+API 行程只負責上傳、建立處理工作與查詢狀態。PDF 的 `pypdf`、OCR 與可選的
+內嵌圖片處理不會在 Uvicorn 內執行。預設限制為 50 MB、200 頁、單頁 20 秒與整體
+10 分鐘；超限時文件與處理工作會標為 `failed`。只有沒有可擷取文字的 PDF 會做整份
+OCR；內嵌圖片擷取／圖片 OCR 預設關閉，可由 `PDF_IMAGE_*` 設定開啟與限制數量。
 
 ## 2. 驗證與使用者身分
 
