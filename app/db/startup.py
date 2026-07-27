@@ -6,10 +6,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.base import Base
 from app.db.init_db import init_db
 from app.db.session import database_backend, engine
+from app.models.chat import ChatSession
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.document_image import DocumentImage
-
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,11 @@ def _ensure_postgresql_schema() -> None:
         if "document_images" in tables
         else {}
     )
+    chat_session_columns = (
+        {column["name"]: column for column in inspector.get_columns("chat_sessions")}
+        if "chat_sessions" in tables
+        else {}
+    )
     session_fk_exists = "documents" in tables and any(
         foreign_key.get("constrained_columns") == ["session_id"]
         for foreign_key in inspector.get_foreign_keys("documents")
@@ -68,6 +73,7 @@ def _ensure_postgresql_schema() -> None:
         or not image_columns.get("knowledge_base_id", {}).get("nullable", False)
         or not session_fk_exists
         or not scope_check_exists
+        or "chat_type" not in chat_session_columns
     )
     if needs_upgrade:
         init_db()
@@ -79,15 +85,18 @@ def _ensure_sqlite_schema() -> None:
     Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
     tables_to_upgrade = (
-        (Document.__table__, "knowledge_base_id"),
-        (DocumentChunk.__table__, "knowledge_base_id"),
-        (DocumentImage.__table__, "knowledge_base_id"),
+        (Document.__table__, "knowledge_base_id", True),
+        (DocumentChunk.__table__, "knowledge_base_id", True),
+        (DocumentImage.__table__, "knowledge_base_id", True),
+        (ChatSession.__table__, "chat_type", False),
     )
-    for table, nullable_column in tables_to_upgrade:
+    for table, required_column, must_be_nullable in tables_to_upgrade:
         columns = {column["name"]: column for column in inspector.get_columns(table.name)}
-        needs_session_column = table.name == "documents" and "session_id" not in columns
-        needs_nullable_column = not columns[nullable_column]["nullable"]
-        if needs_session_column or needs_nullable_column:
+        needs_column = required_column not in columns
+        needs_nullable_column = (
+            must_be_nullable and not needs_column and not columns[required_column]["nullable"]
+        )
+        if needs_column or needs_nullable_column:
             _rebuild_sqlite_table(table)
             inspector = inspect(engine)
 
@@ -136,6 +145,9 @@ def _validate_schema() -> None:
     document_columns = set(document_column_details)
     if "session_id" not in document_columns:
         raise RuntimeError("Database schema initialization failed; documents.session_id is missing.")
+    chat_session_columns = {column["name"] for column in inspector.get_columns("chat_sessions")}
+    if "chat_type" not in chat_session_columns:
+        raise RuntimeError("Database schema initialization failed; chat_sessions.chat_type is missing.")
     nullable_targets = {
         "documents": document_column_details,
         "document_chunks": {

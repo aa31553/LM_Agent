@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import ErrorCode, MessageRole, RiskLevel
+from app.core.constants import ChatType, ErrorCode, MessageRole, RiskLevel
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.models.audit import AuditEvent, LLMCallLog, RetrievalLog
@@ -99,6 +99,7 @@ class AuditService:
         user: User,
         session_id: UUID | None,
         title_seed: str,
+        chat_type: ChatType = ChatType.GENERAL,
     ) -> ChatSession:
         if self.db is None:
             raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
@@ -117,6 +118,12 @@ class AuditService:
                 )
                 self.db.commit()
                 raise APIError(ErrorCode.PERMISSION_DENIED, "User does not have permission to access this session.", 403)
+            if session.chat_type != chat_type.value:
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    f"This session is for {session.chat_type} chat and cannot be used for {chat_type.value} chat.",
+                    400,
+                )
             session.updated_at = datetime.utcnow()
             self.db.flush()
             return session
@@ -125,9 +132,11 @@ class AuditService:
             id=session_id,
             user_id=user.id,
             title=self._title_from_query(title_seed),
+            chat_type=chat_type.value,
         ) if session_id is not None else ChatSession(
             user_id=user.id,
             title=self._title_from_query(title_seed),
+            chat_type=chat_type.value,
         )
         self.db.add(session)
         self.db.flush()

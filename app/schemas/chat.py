@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.core.constants import RiskLevel
+from app.core.constants import ChatType, RiskLevel
 
 
 class ChatQueryRequest(BaseModel):
@@ -14,6 +14,18 @@ class ChatQueryRequest(BaseModel):
     use_rerank: bool = True
     use_masking: bool = True
     use_tools: bool = False
+
+
+class CodeChatRequest(ChatQueryRequest):
+    code: str | None = Field(default=None, max_length=200_000)
+    language: str | None = Field(default=None, max_length=32)
+    file_name: str | None = Field(default=None, max_length=255)
+    line_start: int | None = Field(default=None, ge=1)
+    line_end: int | None = Field(default=None, ge=1)
+
+    def model_post_init(self, __context) -> None:
+        if self.line_start is not None and self.line_end is not None and self.line_end < self.line_start:
+            raise ValueError("line_end must be greater than or equal to line_start")
 
 
 class ToolCallTrace(BaseModel):
@@ -72,6 +84,31 @@ class ChatQueryResponse(BaseModel):
     risk_level: RiskLevel = RiskLevel.LOW
     masked_entities: list[MaskedEntity] = Field(default_factory=list)
     tool_calls: list[ToolCallTrace] = Field(default_factory=list)
+
+
+class CodeDiagnosis(BaseModel):
+    summary: str | None = None
+    confidence: str | None = None
+
+
+class SuggestedCodeChange(BaseModel):
+    title: str
+    description: str | None = None
+    code: str | None = None
+    language: str | None = None
+
+
+class CodeBlock(BaseModel):
+    language: str | None = None
+    code: str
+
+
+class CodeChatResponse(ChatQueryResponse):
+    chat_type: ChatType = ChatType.CODE
+    diagnosis: CodeDiagnosis = Field(default_factory=CodeDiagnosis)
+    suggested_changes: list[SuggestedCodeChange] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    code_blocks: list[CodeBlock] = Field(default_factory=list)
 
 
 class ChatMessage(BaseModel):

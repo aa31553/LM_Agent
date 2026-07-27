@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import ErrorCode, MessageRole, RiskLevel
+from app.core.constants import ChatType, ErrorCode, MessageRole, RiskLevel
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.models.document import Document
@@ -52,6 +52,10 @@ class RAGService:
         payload: ChatQueryRequest,
         request_id: str,
         principal: Principal,
+        *,
+        chat_type: ChatType = ChatType.GENERAL,
+        code_context: str = "",
+        finalize_response: bool = True,
     ) -> ChatQueryResponse:
         reset_llm_token_usage()
         user = self.audit_service.ensure_user(principal)
@@ -60,6 +64,7 @@ class RAGService:
             user=user,
             session_id=payload.session_id,
             title_seed=payload.query,
+            chat_type=chat_type,
         )
         query_dlp = self.masking_service.scan_and_mask(payload.query, location="query")
         processed_query = self.query_processor.normalize(query_dlp.text)
@@ -73,6 +78,13 @@ class RAGService:
             risk_level=query_dlp.risk_level,
         )
         self.audit_service.record_masking_events(user_message.id, query_dlp, "query")
+        code_dlp = self.masking_service.scan_and_mask(code_context, location="code")
+        self.audit_service.record_masking_events(user_message.id, code_dlp, "code")
+        if code_dlp.blocked:
+            if self.db is not None:
+                self.db.commit()
+            raise APIError(ErrorCode.DLP_BLOCKED, "The supplied code contains restricted information.", 400)
+        code_context = code_dlp.text
         if self._block_prompt_injection(payload.query, request_id, user.id, user_message.id):
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains prompt injection content.", 400)
         if query_dlp.blocked:
@@ -145,8 +157,7 @@ class RAGService:
             )
             if self.db is not None:
                 self.db.commit()
-            return finalize_chat_response(
-                ChatQueryResponse(
+            response = ChatQueryResponse(
                     request_id=request_id,
                     session_id=session.id,
                     message_id=user_message.id,
@@ -156,7 +167,7 @@ class RAGService:
                     risk_level=RiskLevel.LOW,
                     masked_entities=query_dlp.masked_entities,
                 )
-            )
+            return finalize_chat_response(response) if finalize_response else response
 
         if chunks:
             context, used_chunks = self.context_builder.build_with_used_chunks(
@@ -191,7 +202,14 @@ class RAGService:
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
-        if general_knowledge_mode:
+        if chat_type == ChatType.CODE:
+            system_prompt, user_prompt = self.prompt_builder.build_code(
+                masked_query=processed_query,
+                code_context=code_context,
+                retrieved_context=context_dlp.text,
+                skill_context=skill_resolution.prompt,
+            )
+        elif general_knowledge_mode:
             system_prompt, user_prompt = self.prompt_builder.build_general_knowledge(
                 masked_query=processed_query,
                 skill_context=skill_resolution.prompt,
@@ -309,8 +327,7 @@ class RAGService:
         if self.db is not None:
             self.db.commit()
 
-        return finalize_chat_response(
-            ChatQueryResponse(
+        response = ChatQueryResponse(
                 request_id=request_id,
                 session_id=session.id,
                 message_id=user_message.id,
@@ -328,13 +345,17 @@ class RAGService:
                 ),
                 tool_calls=tool_traces,
             )
-        )
+        return finalize_chat_response(response) if finalize_response else response
 
     async def stream_answer(
         self,
         payload: ChatQueryRequest,
         request_id: str,
         principal: Principal,
+        *,
+        chat_type: ChatType = ChatType.GENERAL,
+        code_context: str = "",
+        finalize_response: bool = True,
     ) -> AsyncIterator[dict[str, Any]]:
         reset_llm_token_usage()
         user = self.audit_service.ensure_user(principal)
@@ -343,6 +364,7 @@ class RAGService:
             user=user,
             session_id=payload.session_id,
             title_seed=payload.query,
+            chat_type=chat_type,
         )
         query_dlp = self.masking_service.scan_and_mask(payload.query, location="query")
         processed_query = self.query_processor.normalize(query_dlp.text)
@@ -356,6 +378,13 @@ class RAGService:
             risk_level=query_dlp.risk_level,
         )
         self.audit_service.record_masking_events(user_message.id, query_dlp, "query")
+        code_dlp = self.masking_service.scan_and_mask(code_context, location="code")
+        self.audit_service.record_masking_events(user_message.id, code_dlp, "code")
+        if code_dlp.blocked:
+            if self.db is not None:
+                self.db.commit()
+            raise APIError(ErrorCode.DLP_BLOCKED, "The supplied code contains restricted information.", 400)
+        code_context = code_dlp.text
         yield {
             "event": "start",
             "request_id": request_id,
@@ -434,8 +463,7 @@ class RAGService:
             )
             if self.db is not None:
                 self.db.commit()
-            response = finalize_chat_response(
-                ChatQueryResponse(
+            response = ChatQueryResponse(
                     request_id=request_id,
                     session_id=session.id,
                     message_id=user_message.id,
@@ -445,7 +473,8 @@ class RAGService:
                     risk_level=RiskLevel.LOW,
                     masked_entities=query_dlp.masked_entities,
                 )
-            )
+            if finalize_response:
+                response = finalize_chat_response(response)
             yield {"event": "delta", "text": answer}
             yield {"event": "done", "response": response}
             return
@@ -483,7 +512,14 @@ class RAGService:
         self.audit_service.record_masking_events(user_message.id, context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, image_context_dlp, "context")
         self.audit_service.record_masking_events(user_message.id, llmwiki_context_dlp, "context")
-        if general_knowledge_mode:
+        if chat_type == ChatType.CODE:
+            system_prompt, user_prompt = self.prompt_builder.build_code(
+                masked_query=processed_query,
+                code_context=code_context,
+                retrieved_context=context_dlp.text,
+                skill_context=skill_resolution.prompt,
+            )
+        elif general_knowledge_mode:
             system_prompt, user_prompt = self.prompt_builder.build_general_knowledge(
                 masked_query=processed_query,
                 skill_context=skill_resolution.prompt,
@@ -626,8 +662,7 @@ class RAGService:
         if self.db is not None:
             self.db.commit()
 
-        response = finalize_chat_response(
-            ChatQueryResponse(
+        response = ChatQueryResponse(
                 request_id=request_id,
                 session_id=session.id,
                 message_id=user_message.id,
@@ -645,7 +680,8 @@ class RAGService:
                 ),
                 tool_calls=tool_traces,
             )
-        )
+        if finalize_response:
+            response = finalize_chat_response(response)
         yield {"event": "done", "response": response}
 
     def _session_has_documents(self, session_id: UUID) -> bool:

@@ -1,8 +1,8 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/llmwiki-feature`  
-> API 版本：`0.5.0`
-> 更新日期：2026-07-22
+> API 版本：`0.6.0`
+> 更新日期：2026-07-27
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。若要讓 LLM / Agent 解析 API 契約，請改讀 [FastAPI LLM Reference](FastAPI_LLM_Reference.md)。執行中的欄位與 schema 最終仍以 `GET /openapi.json` 為準。
 
@@ -185,7 +185,26 @@ Content-Type: application/json
 `### 2. Key points` 至 `### 5. Limitations`；這些內容位於 `sections`。若模型
 服務未提供 token 統計，前端不顯示用量。
 
-### 4.4 LLMWiki
+### 4.4 程式碼問答
+
+程式碼助理使用 `POST /api/v1/code-chat/query` 或 SSE 版本
+`POST /api/v1/code-chat/stream`。請求可傳 `code`、`language`、`file_name` 與可選
+行號，並可選擇使用者有讀取權限的技術知識庫。回覆會分出診斷、建議修改、風險、
+程式碼區塊及 token usage。
+
+可先把 `.py`、`.js`、`.ts`、`.json`、`.md` 等程式或設定檔上傳為 Session 暫存文件：
+
+```http
+POST /api/v1/documents/upload
+scope=session
+chat_type=code
+confidential_level=internal
+```
+
+Code Session 不可拿去呼叫一般 `/chat/*`，反之亦然；刪除該 Session 時會一併刪除
+暫存檔與聊天紀錄。貼上或上傳的程式碼只會送給 LLM 分析，不會由 LM Agent 執行。
+
+### 4.5 LLMWiki
 
 所有正式 LLMWiki 查詢都必須以重複 query parameter 傳入至少一個 `knowledge_base_ids`：
 
@@ -201,7 +220,7 @@ GET /api/v1/llmwiki/operations?limit=20
 
 `GET /api/v1/llmwiki/demo` 不需登入，只回傳內建展示資料。
 
-### 4.5 管理員檢查
+### 4.6 管理員檢查
 
 ```http
 GET  /api/v1/admin/status

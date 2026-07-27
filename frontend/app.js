@@ -5,6 +5,7 @@ const tabs = {
   documents: "文件",
   skills: "Skills",
   chat: "問答",
+  code: "程式助理",
   admin: "管理稽核",
   llmwiki: "LLMWiki",
   raw: "API",
@@ -16,6 +17,7 @@ const state = {
   selectedKbId: localStorage.getItem("lmAgentKbId") || "",
   selectedDocId: localStorage.getItem("lmAgentDocId") || "",
   sessionId: localStorage.getItem("lmAgentSessionId") || "",
+  codeSessionId: localStorage.getItem("lmAgentCodeSessionId") || "",
   knowledgeBases: [],
   documents: [],
   documentFormats: [],
@@ -58,6 +60,7 @@ function renderAll() {
   renderDocuments();
   renderSkills();
   renderChat();
+  renderCodeAssistant();
   renderAdmin();
   renderRaw();
 }
@@ -389,7 +392,7 @@ async function deleteKbPermission() {
 }
 
 function syncKbSelectors() {
-  ["#uploadKbId", "#chatKbId", "#llmwikiKbId"].forEach((selector) => {
+  ["#uploadKbId", "#chatKbId", "#codeKbId", "#llmwikiKbId"].forEach((selector) => {
     const node = $(selector);
     if (node) node.innerHTML = optionHtml(state.knowledgeBases, state.selectedKbId);
   });
@@ -1584,6 +1587,65 @@ async function loadSessionMessages() {
     writeOutput("#chatOutput", errorPayload(error));
   }
 }
+
+function renderCodeAssistant() {
+  $("#code").innerHTML = `
+    <div class="grid">
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-header"><h2>程式碼提問</h2><div class="actions"><button id="codeAskBtn" class="primary">送出</button><button id="codeStreamBtn">串流送出</button></div></div>
+          <div class="form-grid">
+            <label class="wide">問題<textarea id="codeQuery" placeholder="例如：這段程式為何會在資料庫連線中斷時失敗？"></textarea></label>
+            <label>語言<input id="codeLanguage" placeholder="python" /></label><label>檔名<input id="codeFileName" placeholder="service.py" /></label>
+            <label>開始行<input id="codeLineStart" type="number" min="1" /></label><label>結束行<input id="codeLineEnd" type="number" min="1" /></label>
+            <label class="wide">技術知識庫<select id="codeKbId"></select></label>
+            <label class="wide">貼上程式碼<textarea id="codeInput" class="code-input" spellcheck="false" placeholder="可直接貼上程式碼，或由下方選擇檔案載入"></textarea></label>
+            <label class="wide">選擇程式檔<input id="codeFileInput" type="file" accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.h,.cpp,.cxx,.cs,.go,.rs,.php,.rb,.sh,.ps1,.sql,.json,.md,.txt" /></label>
+            <div class="actions wide"><button id="codeLoadFileBtn">載入到本次提問</button><button id="codeUploadFileBtn">暫存上傳並建立檢索</button></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h2>Code Session</h2><div class="actions"><button id="codeMessagesBtn">紀錄</button><button id="codeDeleteSessionBtn" class="danger">刪除</button></div></div>
+          <div class="form-grid"><label class="wide">Session ID<input id="codeSessionIdInput" /></label><label>Top K<input id="codeTopK" type="number" min="1" max="50" value="8" /></label><label class="checkbox-label"><input id="codeUseRerank" type="checkbox" checked /> Rerank</label></div>
+          <p class="helper-text">暫存檔案只會寫入 Code Session，並在刪除 Session 時一併移除。知識庫檢索仍依目前登入者權限過濾。</p>
+        </div>
+      </div>
+      <div class="panel"><div class="panel-header"><h2>回答</h2></div><div id="codeAnswerOutput" class="answer"></div><div id="codeDiagnosisOutput" class="answer-sections" hidden></div><div id="codeRisksOutput" class="answer-sections" hidden></div><div id="codeBlocksOutput" class="code-blocks" hidden></div><div id="codeUsageOutput" class="usage-summary" hidden></div></div>
+      <div class="panel full-width"><div class="panel-header"><h2>回應</h2></div><div id="codeOutput" class="output"></div></div>
+    </div>`;
+  $("#codeSessionIdInput").value = state.codeSessionId;
+  $("#codeAskBtn").addEventListener("click", askCodeQuestion); $("#codeStreamBtn").addEventListener("click", streamCodeQuestion);
+  $("#codeLoadFileBtn").addEventListener("click", loadCodeFileIntoPrompt); $("#codeUploadFileBtn").addEventListener("click", uploadCodeFile);
+  $("#codeMessagesBtn").addEventListener("click", loadCodeSessionMessages); $("#codeDeleteSessionBtn").addEventListener("click", deleteCodeSession); syncKbSelectors();
+}
+
+function numberOrNull(value) { return value.trim() ? Number(value) : null; }
+function codeChatPayload() {
+  const kbId = $("#codeKbId").value || state.selectedKbId;
+  const payload = { session_id: $("#codeSessionIdInput").value.trim() || null, knowledge_base_ids: kbId ? [kbId] : [], query: $("#codeQuery").value.trim(), code: $("#codeInput").value || null, language: $("#codeLanguage").value.trim() || null, file_name: $("#codeFileName").value.trim() || null, line_start: numberOrNull($("#codeLineStart").value), line_end: numberOrNull($("#codeLineEnd").value), top_k: Number($("#codeTopK").value || 8), use_rerank: $("#codeUseRerank").checked, use_masking: true, use_tools: false };
+  if (!payload.query) throw new Error("請輸入程式碼問題"); return payload;
+}
+function rememberCodeSession(id) { if (!id) return; state.codeSessionId = id; localStorage.setItem("lmAgentCodeSessionId", id); $("#codeSessionIdInput").value = id; }
+function renderUsageFor(selector, usage) { const node = $(selector); const values = [["輸入", usage?.prompt_tokens], ["輸出", usage?.completion_tokens], ["總計", usage?.total_tokens]].filter(([, value]) => Number.isInteger(value)); node.textContent = values.map(([label, value]) => `${label} ${value} tokens`).join(" · "); node.hidden = values.length === 0; }
+function renderCodeResponse(payload) {
+  $("#codeAnswerOutput").textContent = payload?.answer || "";
+  const diagnosis = $("#codeDiagnosisOutput"); diagnosis.replaceChildren();
+  const details = [[payload?.diagnosis?.summary ? `診斷${payload.diagnosis.confidence ? `（${payload.diagnosis.confidence}）` : ""}` : "", payload?.diagnosis?.summary], ...(payload?.suggested_changes || []).map((item) => [item.title, item.description])];
+  details.filter(([, text]) => text).forEach(([title, text]) => { const section = document.createElement("section"); const heading = document.createElement("h3"); heading.textContent = title; const body = document.createElement("p"); body.textContent = text; section.append(heading, body); diagnosis.appendChild(section); }); diagnosis.hidden = diagnosis.childElementCount === 0;
+  const risks = $("#codeRisksOutput"); risks.replaceChildren(); if (payload?.risks?.length) { const section = document.createElement("section"); const heading = document.createElement("h3"); heading.textContent = "風險與注意事項"; const list = document.createElement("ul"); payload.risks.forEach((risk) => { const item = document.createElement("li"); item.textContent = risk; list.appendChild(item); }); section.append(heading, list); risks.appendChild(section); } risks.hidden = risks.childElementCount === 0;
+  const blocks = $("#codeBlocksOutput"); blocks.replaceChildren(); for (const block of payload?.code_blocks || []) { const section = document.createElement("section"); const label = document.createElement("div"); label.className = "code-block-label"; label.textContent = block.language || "code"; const pre = document.createElement("pre"); const code = document.createElement("code"); code.textContent = block.code; pre.appendChild(code); section.append(label, pre); blocks.appendChild(section); } blocks.hidden = blocks.childElementCount === 0;
+  renderUsageFor("#codeUsageOutput", payload?.usage);
+}
+async function askCodeQuestion() { try { const payload = await api("/code-chat/query", { method: "POST", json: codeChatPayload() }); rememberCodeSession(payload.session_id); renderCodeResponse(payload); writeOutput("#codeOutput", payload); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
+async function streamCodeQuestion() {
+  try { const payload = codeChatPayload(); renderCodeResponse(null); writeOutput("#codeOutput", "streaming..."); const response = await fetch(`${API_PREFIX}/code-chat/stream`, { method: "POST", headers: { Authorization: `Bearer ${state.token}`, "X-Request-ID": state.requestId, "Content-Type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(await response.text()); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; const events = [];
+    while (true) { const { value, done } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const parts = buffer.split("\n\n"); buffer = parts.pop() || ""; for (const part of parts) { const line = part.split("\n").find((item) => item.startsWith("data: ")); if (!line) continue; const event = JSON.parse(line.slice(6)); events.push(event); if (typeof event.text === "string") $("#codeAnswerOutput").textContent += event.text; if (event.response) { rememberCodeSession(event.response.session_id); renderCodeResponse(event.response); } } } writeOutput("#codeOutput", events);
+  } catch (error) { writeOutput("#codeOutput", errorPayload(error)); }
+}
+async function loadCodeFileIntoPrompt() { try { const file = $("#codeFileInput").files[0]; if (!file) throw new Error("請先選擇程式檔"); $("#codeInput").value = await file.text(); if (!$("#codeFileName").value) $("#codeFileName").value = file.name; if (!$("#codeLanguage").value) $("#codeLanguage").value = file.name.split(".").pop().toLowerCase(); showAlert("已載入檔案，本次提問會直接包含其內容。", "success"); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
+async function uploadCodeFile() { try { const file = $("#codeFileInput").files[0]; if (!file) throw new Error("請先選擇程式檔"); const form = new FormData(); form.append("file", file); form.append("scope", "session"); form.append("chat_type", "code"); form.append("confidential_level", "internal"); if (state.codeSessionId) form.append("session_id", state.codeSessionId); const payload = await api("/documents/upload", { method: "POST", body: form }); rememberCodeSession(payload.session_id); writeOutput("#codeOutput", payload); showAlert("程式檔已暫存並排入索引；完成後可作為本 Code Session 的授權檢索內容。", "success"); await refreshDocuments(); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
+async function loadCodeSessionMessages() { try { const id = $("#codeSessionIdInput").value.trim() || state.codeSessionId; if (!id) throw new Error("請輸入 Code Session ID"); writeOutput("#codeOutput", await api(`/chat/sessions/${id}/messages`)); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
+async function deleteCodeSession() { try { const id = $("#codeSessionIdInput").value.trim() || state.codeSessionId; if (!id) throw new Error("請輸入 Code Session ID"); if (!window.confirm("刪除 Code Session 將一併清除聊天訊息及暫存程式檔，確定繼續？")) return; const payload = await api(`/chat/sessions/${id}`, { method: "DELETE" }); state.codeSessionId = ""; localStorage.removeItem("lmAgentCodeSessionId"); $("#codeSessionIdInput").value = ""; renderCodeResponse(null); writeOutput("#codeOutput", payload); await refreshDocuments(); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
 
 async function deleteSession() {
   try {

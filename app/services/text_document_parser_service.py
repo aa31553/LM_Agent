@@ -57,7 +57,9 @@ class _HTMLTextExtractor(HTMLParser):
 
 class TextDocumentParserService:
     supported_types = {
-        "txt", "md", "markdown", "log", "csv", "json", "yaml", "yml", "html", "htm", "xml"
+        "txt", "md", "markdown", "log", "csv", "json", "yaml", "yml", "html", "htm", "xml",
+        "py", "js", "ts", "jsx", "tsx", "java", "c", "h", "cpp", "cxx", "cs", "go", "rs",
+        "php", "rb", "sh", "ps1", "sql",
     }
 
     async def parse(
@@ -114,6 +116,8 @@ class TextDocumentParserService:
             return content, content
         if file_type in {"txt", "log"}:
             return self._plain_markdown(title, content), content
+        if file_type in {"py", "js", "ts", "jsx", "tsx", "java", "c", "h", "cpp", "cxx", "cs", "go", "rs", "php", "rb", "sh", "ps1", "sql"}:
+            return f"# {title}\n\n```{file_type}\n{content}\n```", content
         if file_type == "csv":
             return self._csv_markdown(title, content)
         if file_type == "json":

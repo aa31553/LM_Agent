@@ -454,7 +454,41 @@ SSE `delta` 事件逐步輸出文字；`done` 事件內的 `response` 使用與
 
 ---
 
-### 7.3 查詢對話紀錄
+### 7.3 程式碼問答
+
+```http
+POST /api/v1/code-chat/query
+POST /api/v1/code-chat/stream
+```
+
+Code Chat 使用與一般問答相同的授權檢索、DLP、稽核與 usage 紀錄，但會建立
+`chat_type=code` 的獨立 Session；一般 Chat Session 與 Code Session 不可互用。
+`code` 為本次問題直接附帶的程式碼，僅供分析，不會在伺服器執行。`knowledge_base_ids`
+仍只會檢索呼叫者具有讀取權限的技術文件。
+
+```json
+{
+  "session_id": null,
+  "knowledge_base_ids": ["<KB_UUID>"],
+  "query": "這段程式為什麼連線中斷時會失敗？",
+  "code": "result = connection.execute(query)",
+  "language": "python",
+  "file_name": "database.py",
+  "line_start": 42,
+  "line_end": 42,
+  "top_k": 8,
+  "use_rerank": true
+}
+```
+
+回覆為 `CodeChatResponse`：除既有 `answer`、`citations`、`usage` 外，另有
+`diagnosis`、`suggested_changes`、`risks` 與 `code_blocks`，供前端以安全文字節點
+渲染程式區塊。SSE 事件為 `start`、零到多個 `delta`、`done`；`done.response` 為完整
+`CodeChatResponse`。
+
+---
+
+### 7.4 查詢對話紀錄
 
 ```http
 GET /api/v1/chat/sessions/{session_id}/messages
@@ -484,7 +518,7 @@ Response:
 
 ---
 
-### 7.4 刪除 Session
+### 7.5 刪除 Session
 
 ```http
 DELETE /api/v1/chat/sessions/{session_id}

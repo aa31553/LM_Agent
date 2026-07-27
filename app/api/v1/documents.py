@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, Upl
 from fastapi import status as http_status
 from sqlalchemy.orm import Session
 
-from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
+from app.core.constants import ChatType, ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
@@ -37,6 +37,7 @@ async def upload_document(
     scope: DocumentScope = Form(default=DocumentScope.KNOWLEDGE_BASE),
     knowledge_base_id: UUID | None = Form(default=None),
     session_id: UUID | None = Form(default=None),
+    chat_type: ChatType = Form(default=ChatType.GENERAL),
     confidential_level: ConfidentialLevel = Form(...),
     department: str | None = Form(default=None),
     document_type: str | None = Form(default=None),
@@ -50,6 +51,7 @@ async def upload_document(
         scope=scope,
         knowledge_base_id=knowledge_base_id,
         session_id=session_id,
+        chat_type=chat_type,
         confidential_level=confidential_level,
         department=department,
         document_type=document_type,

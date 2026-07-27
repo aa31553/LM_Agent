@@ -56,6 +56,11 @@ class MessageRole(TextEnum):
     SYSTEM = "system"
 
 
+class ChatType(TextEnum):
+    GENERAL = "general"
+    CODE = "code"
+
+
 class DLPAction(TextEnum):
     ALLOW = "allow"
     MASK = "mask"

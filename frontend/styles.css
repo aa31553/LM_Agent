@@ -439,6 +439,48 @@ tr:last-child td {
   text-align: right;
 }
 
+.code-input,
+.code-blocks pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.code-input {
+  min-height: 280px;
+  tab-size: 2;
+}
+
+.code-blocks {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.code-blocks[hidden] {
+  display: none;
+}
+
+.code-blocks section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.code-block-label {
+  padding: 6px 10px;
+  color: #dbeafe;
+  background: #1e293b;
+  font-size: 12px;
+}
+
+.code-blocks pre {
+  max-height: 520px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: #e2e8f0;
+  background: #0f172a;
+}
+
 .wiki-summary {
   min-height: 190px;
   border: 1px solid var(--line);

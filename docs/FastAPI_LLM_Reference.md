@@ -3,10 +3,10 @@ document_id: lm-agent-fastapi-llm-reference
 document_type: api_contract_companion
 language: zh-TW
 api_name: LM Agent API
-api_version: 0.5.0
+api_version: 0.6.0
 base_path: /api/v1
 branch: codex/llmwiki-feature
-updated_at: 2026-07-22
+updated_at: 2026-07-27
 canonical_runtime_schema: GET /openapi.json
 human_guide: docs/FastAPI_Human_Guide.md
 legacy_detail: docs/Fastapi_spec.md
@@ -32,7 +32,7 @@ legacy_detail: docs/Fastapi_spec.md
 ```yaml
 service:
   title: LM Agent API
-  version: 0.5.0
+  version: 0.6.0
   base_path: /api/v1
   docs:
     swagger: /docs
@@ -174,6 +174,8 @@ allow_list_match:
 | --- | --- | --- | --- | --- |
 | POST | `/chat/query` | auth + permission-filtered | `ChatQueryRequest` | `ChatQueryResponse` |
 | POST | `/chat/stream` | auth + permission-filtered | `ChatQueryRequest` | SSE stream |
+| POST | `/code-chat/query` | auth + permission-filtered | `CodeChatRequest` | `CodeChatResponse` |
+| POST | `/code-chat/stream` | auth + permission-filtered | `CodeChatRequest` | SSE stream (`CodeChatResponse` in `done`) |
 | GET | `/chat/sessions/{session_id}/messages` | owner-or-admin | path UUID | `ChatSessionMessages` |
 | DELETE | `/chat/sessions/{session_id}` | owner-or-admin | path UUID | `ChatSessionDeleteResponse` |
 

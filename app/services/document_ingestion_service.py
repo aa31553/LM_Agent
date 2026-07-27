@@ -8,7 +8,7 @@ from PIL import Image
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.core.constants import ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
+from app.core.constants import ChatType, ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.models.audit import AuditEvent
@@ -85,6 +85,7 @@ class DocumentIngestionService:
         scope: DocumentScope,
         knowledge_base_id: UUID | None,
         session_id: UUID | None,
+        chat_type: ChatType,
         confidential_level: ConfidentialLevel,
         department: str | None,
         document_type: str | None,
@@ -107,6 +108,7 @@ class DocumentIngestionService:
             scope=scope,
             knowledge_base_id=knowledge_base_id,
             session_id=session_id,
+            chat_type=chat_type,
             principal=principal,
             title_seed=file.filename,
         )
@@ -406,7 +408,7 @@ class DocumentIngestionService:
         if category == "office":
             await self._process_office_document(document)
             return
-        if category in {"text", "structured"}:
+        if category in {"text", "structured", "code"}:
             await self._process_text_document(document)
             return
         if category == "image":
@@ -833,6 +835,7 @@ class DocumentIngestionService:
         scope: DocumentScope,
         knowledge_base_id: UUID | None,
         session_id: UUID | None,
+        chat_type: ChatType,
         principal: Principal,
         title_seed: str,
     ) -> tuple[UUID | None, UUID | None, UUID]:
@@ -861,6 +864,7 @@ class DocumentIngestionService:
                 user=user,
                 session_id=None,
                 title_seed=title_seed,
+                chat_type=chat_type,
             )
         else:
             session = self.db.get(ChatSession, session_id)
@@ -871,6 +875,12 @@ class DocumentIngestionService:
                     ErrorCode.PERMISSION_DENIED,
                     "User does not have permission to access this session.",
                     403,
+                )
+            if session.chat_type != chat_type.value:
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    f"This session is for {session.chat_type} chat and cannot accept {chat_type.value} uploads.",
+                    400,
                 )
         return None, session.id, user.id
 

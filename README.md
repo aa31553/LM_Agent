@@ -454,6 +454,8 @@ Important endpoints:
 - `GET /api/v1/llmwiki/demo`
 - `POST /api/v1/chat/query`
 - `POST /api/v1/chat/stream`
+- `POST /api/v1/code-chat/query`
+- `POST /api/v1/code-chat/stream`
 - `GET /api/v1/chat/sessions/{session_id}/messages`
 - `DELETE /api/v1/chat/sessions/{session_id}`
 - `POST /api/v1/permissions/documents/{document_id}`
@@ -475,6 +477,11 @@ empty list for session-only RAG. Deleting `/api/v1/chat/sessions/{session_id}` r
 the conversation and all of its temporary documents and local artifacts without
 affecting knowledge-base documents. See `docs/Fastapi_spec.md` or `/openapi.json` for
 the LLM-readable API contract.
+
+Code Assistant uses separate `code` chat sessions. It accepts pasted code or temporary
+session uploads (including `.py`, `.js`, `.ts`, `.json`, and `.md`), preserves normal
+chat history and LLM usage, and only retrieves technical documents that the caller may
+read. A `code` session cannot be reused by normal Chat, or vice versa.
 
 Standard error response:
 

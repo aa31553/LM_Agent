@@ -1,12 +1,12 @@
 from pathlib import Path
 
-
 UPLOAD_TYPE_GROUPS: dict[str, tuple[str, ...]] = {
     "pdf": ("pdf",),
     "image": ("png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"),
     "office": ("docx", "xlsx", "pptx"),
     "text": ("txt", "md", "markdown", "log"),
     "structured": ("csv", "json", "yaml", "yml", "html", "htm", "xml"),
+    "code": ("py", "js", "ts", "jsx", "tsx", "java", "c", "h", "cpp", "cxx", "cs", "go", "rs", "php", "rb", "sh", "ps1", "sql"),
 }
 
 SUPPORTED_UPLOAD_TYPES = {
