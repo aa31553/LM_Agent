@@ -1,8 +1,8 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/llmwiki-feature`  
-> API 版本：`0.7.0`
-> 更新日期：2026-07-27
+> API 版本：`0.8.0`
+> 更新日期：2026-07-28
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。若要讓 LLM / Agent 解析 API 契約，請改讀 [FastAPI LLM Reference](FastAPI_LLM_Reference.md)。執行中的欄位與 schema 最終仍以 `GET /openapi.json` 為準。
 
@@ -190,6 +190,12 @@ Content-Type: application/json
 | 有文件來源但找不到相關內容 | 維持嚴格 RAG，不用通用知識補答 |
 
 串流版本為 `POST /api/v1/chat/stream`，回應 Content-Type 為 `text/event-stream`。
+
+同一 `session_id` 的最近對話會自動加入 LLM `messages`，一般問答、程式碼助理、
+非串流、SSE 與工具呼叫均使用相同規則。預設保留最近 6 輪、最多 8,000 字元，
+可用 `CHAT_HISTORY_MAX_TURNS` 與 `CHAT_HISTORY_MAX_CHARS` 調整。歷史訊息只使用
+已完成遮罩的 `final_content`／`masked_content`，並在送出前再次進行 DLP；本次
+user 訊息不會重複加入。
 
 回答畫面會把主要答案、重點、來源、信心與限制分區顯示，並在下方顯示外部 LLM
 回傳的輸入、輸出與總 token 數。API 的 `answer` 不再包含

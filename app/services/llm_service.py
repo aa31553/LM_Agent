@@ -1,8 +1,7 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
-from app.integrations.openai_compatible_client import ChatCompletionResult
-from app.integrations.openai_compatible_client import OpenAICompatibleClient
+from app.integrations.openai_compatible_client import ChatCompletionResult, OpenAICompatibleClient
 
 
 class LLMService:
@@ -44,3 +43,9 @@ class LLMService:
             user_prompt=user_prompt,
             image_paths=image_paths,
         )
+
+    def stream_complete_messages(
+        self,
+        messages: list[dict[str, Any]],
+    ) -> AsyncIterator[str]:
+        return self.client.stream_chat_completion_messages(messages=messages)

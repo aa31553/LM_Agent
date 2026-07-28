@@ -396,6 +396,20 @@ Request:
 `images` 會是空陣列。若有文件來源但檢索不到相關內容，仍維持嚴格 RAG 行為，
 不會改用通用知識補答。
 
+若請求帶入既有 `session_id`，後端會在本次 user prompt 前加入該 Session 最近完成的
+user／assistant 訊息，使模型能理解「剛才」、「它」等多輪語意。此行為同時套用
+於一般 Chat、Code Chat、同步、SSE 與 `use_tools=true`。預設上限如下：
+
+```env
+CHAT_HISTORY_MAX_TURNS=6
+CHAT_HISTORY_MAX_CHARS=8000
+```
+
+history 不會再次加入本次已寫入資料庫的 user 訊息；只讀取 `final_content` 或
+`masked_content`，並在送給 LLM 前重新執行 DLP。歷史資料會標記為不可信參考內容，
+不得覆蓋 system 規則。若 `session_id` 為空或為新 Session，第一次問答仍只有本次
+prompt。
+
 Response:
 
 ```json
@@ -502,6 +516,9 @@ Code Session 的暫存文件檢索。
 ```http
 GET /api/v1/chat/sessions/{session_id}/messages
 ```
+
+此路由提供前端／稽核查閱；RAGService 會直接從相同資料表讀取安全版本的歷史訊息，
+不會透過 HTTP 回呼自己的 API。
 
 Response:
 

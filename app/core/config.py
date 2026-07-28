@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.7.0"
+    app_version: str = "0.8.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 1536
     llm_reasoning_effort: str = ""
     llm_send_images_to_model: bool = False
+    chat_history_max_turns: int = Field(default=6, ge=0, le=50)
+    chat_history_max_chars: int = Field(default=8000, ge=0, le=100_000)
 
     retrieval_top_k: int = 20
     rerank_top_n: int = 8

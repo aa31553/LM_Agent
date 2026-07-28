@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -238,6 +240,37 @@ async def test_llm_stream_requests_and_captures_usage() -> None:
     assert usage.prompt_tokens == 12
     assert usage.completion_tokens == 3
     assert usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_accepts_conversation_messages() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.read())
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"continued"}}]}\n\ndata: [DONE]\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "earlier question"},
+        {"role": "assistant", "content": "earlier answer"},
+        {"role": "user", "content": "follow-up"},
+    ]
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        chunks = [
+            chunk
+            async for chunk in OpenAICompatibleClient(
+                http_client=http_client
+            ).stream_chat_completion_messages(messages)
+        ]
+
+    assert chunks == ["continued"]
+    assert captured["payload"]["messages"] == messages
 
 
 @pytest.mark.asyncio

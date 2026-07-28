@@ -20,6 +20,7 @@ from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
 from app.security.prompt_injection_detector import PromptInjectionDetector
 from app.services.agent_tool_service import AgentToolService
 from app.services.audit_service import AuditService
+from app.services.chat_history_service import ChatHistoryService, ConversationHistory
 from app.services.chat_response_service import finalize_chat_response
 from app.services.image_context_service import ImageContextService
 from app.services.llm_service import LLMService
@@ -43,6 +44,11 @@ class RAGService:
         self.agent_tool_service = AgentToolService(db=db, llm_service=self.llm_service)
         self.citation_builder = CitationBuilder()
         self.audit_service = AuditService(db)
+        self.chat_history_service = ChatHistoryService(
+            self.masking_service,
+            max_turns=settings.chat_history_max_turns,
+            max_chars=settings.chat_history_max_chars,
+        )
         self.image_context_service = ImageContextService(db)
         self.llmwiki_service = LLMWikiService(db)
         self.skill_service = SkillService()
@@ -222,6 +228,15 @@ class RAGService:
                 llmwiki_context=llmwiki_context_dlp.text,
                 skill_context=skill_resolution.prompt,
             )
+        history = self._build_conversation_history(
+            session_id=session.id,
+            current_message_id=user_message.id,
+        )
+        conversation_messages = self.chat_history_service.build_llm_messages(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            history=history,
+        )
         tool_traces = []
         if payload.use_tools:
             try:
@@ -232,6 +247,7 @@ class RAGService:
                     top_k=payload.top_k,
                     use_rerank=payload.use_rerank,
                     principal=principal,
+                    messages=conversation_messages,
                 )
             except Exception as exc:
                 self.audit_service.record_completed_llm_call(
@@ -270,11 +286,7 @@ class RAGService:
                 message_id=user_message.id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                operation=lambda: self.llm_service.complete(
-                    system_prompt,
-                    user_prompt,
-                    image_paths=[],
-                ),
+                operation=lambda: self._complete_messages(conversation_messages),
             )
         response_dlp = self.masking_service.scan_and_mask(answer, location="response")
         assistant_message = self.audit_service.record_message(
@@ -305,6 +317,9 @@ class RAGService:
                 "skills_used": skill_resolution.triggered_names,
                 "tool_call_count": len(tool_traces),
                 "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
+                "history_message_count": len(history.messages),
+                "history_char_count": history.char_count,
+                "history_truncated": history.truncated,
                 "assistant_message_id": str(assistant_message.id),
                 "llm_latency_ms": latency_ms,
             },
@@ -532,6 +547,15 @@ class RAGService:
                 llmwiki_context=llmwiki_context_dlp.text,
                 skill_context=skill_resolution.prompt,
             )
+        history = self._build_conversation_history(
+            session_id=session.id,
+            current_message_id=user_message.id,
+        )
+        conversation_messages = self.chat_history_service.build_llm_messages(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            history=history,
+        )
 
         answer_parts: list[str] = []
         tool_traces = []
@@ -544,6 +568,7 @@ class RAGService:
                     top_k=payload.top_k,
                     use_rerank=payload.use_rerank,
                     principal=principal,
+                    messages=conversation_messages,
                 )
             except Exception as exc:
                 self.audit_service.record_completed_llm_call(
@@ -582,10 +607,8 @@ class RAGService:
         else:
             started = time.perf_counter()
             try:
-                async for delta in self.llm_service.stream_complete(
-                    system_prompt,
-                    user_prompt,
-                    image_paths=[],
+                async for delta in self.llm_service.stream_complete_messages(
+                    conversation_messages
                 ):
                     answer_parts.append(delta)
                     yield {"event": "delta", "text": delta}
@@ -651,6 +674,9 @@ class RAGService:
                 "skills_used": skill_resolution.triggered_names,
                 "tool_call_count": len(tool_traces),
                 "tool_calls": [trace.model_dump(mode="json") for trace in tool_traces],
+                "history_message_count": len(history.messages),
+                "history_char_count": history.char_count,
+                "history_truncated": history.truncated,
                 "assistant_message_id": str(assistant_message.id),
                 "llm_latency_ms": latency_ms,
             },
@@ -683,6 +709,35 @@ class RAGService:
         if finalize_response:
             response = finalize_chat_response(response)
         yield {"event": "done", "response": response}
+
+    async def _complete_messages(self, messages: list[dict[str, Any]]) -> str:
+        result = await self.llm_service.complete_messages(messages=messages)
+        if result.content:
+            return result.content
+        raise APIError(
+            ErrorCode.LLM_SERVICE_ERROR,
+            "LLM service response message does not contain text content.",
+            status_code=502,
+        )
+
+    def _build_conversation_history(
+        self,
+        *,
+        session_id: UUID,
+        current_message_id: UUID,
+    ) -> ConversationHistory:
+        source_messages = self.audit_service.list_chat_messages(session_id)
+        history = self.chat_history_service.build(
+            source_messages,
+            exclude_message_id=current_message_id,
+        )
+        for entry in history.entries:
+            self.audit_service.record_masking_events(
+                current_message_id,
+                entry.dlp_result,
+                "history",
+            )
+        return history
 
     def _session_has_documents(self, session_id: UUID) -> bool:
         if self.db is None:

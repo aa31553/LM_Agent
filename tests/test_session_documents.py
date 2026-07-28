@@ -12,6 +12,7 @@ from app.core.constants import ConfidentialLevel
 from app.core.security import Principal
 from app.db.base import Base
 from app.db.session import create_database_engine, get_db
+from app.integrations.openai_compatible_client import ChatCompletionResult
 from app.main import create_app
 from app.models.audit import AuditEvent
 from app.models.chat import ChatSession
@@ -31,18 +32,21 @@ class FailIfCalledRetriever:
 class GeneralKnowledgeLLM:
     answer = "未檢索到相關文獻。以下依通用知識回答：我是內部智慧助理。"
 
-    async def complete(self, system_prompt, user_prompt, image_paths=None):
-        assert "no literature retrieval was performed" in system_prompt
-        assert "General knowledge only" in user_prompt
-        assert "Context:" not in user_prompt
-        assert image_paths == []
-        return self.answer
+    def __init__(self) -> None:
+        self.requests: list[list[dict]] = []
 
-    async def stream_complete(self, system_prompt, user_prompt, image_paths=None):
-        assert "no literature retrieval was performed" in system_prompt
-        assert "General knowledge only" in user_prompt
-        assert "Context:" not in user_prompt
-        assert image_paths == []
+    async def complete_messages(self, messages, tools=None, tool_choice=None):
+        self.requests.append(messages)
+        assert "no literature retrieval was performed" in messages[0]["content"]
+        assert "General knowledge only" in messages[-1]["content"]
+        assert "Context:" not in messages[-1]["content"]
+        return ChatCompletionResult(content=self.answer, tool_calls=[])
+
+    async def stream_complete_messages(self, messages):
+        self.requests.append(messages)
+        assert "no literature retrieval was performed" in messages[0]["content"]
+        assert "General knowledge only" in messages[-1]["content"]
+        assert "Context:" not in messages[-1]["content"]
         yield self.answer[:12]
         yield self.answer[12:]
 
@@ -231,6 +235,54 @@ async def test_stream_without_document_scope_uses_general_knowledge_mode(
         assert [event["event"] for event in events] == ["start", "delta", "delta", "done"]
         assert events[-1]["response"].answer == GeneralKnowledgeLLM.answer
         assert events[-1]["response"].citations == []
+
+
+@pytest.mark.asyncio
+async def test_stream_includes_prior_messages_from_the_same_session(
+    session_document_client,
+) -> None:
+    _, session_factory, _ = session_document_client
+    with session_factory() as db:
+        service = RAGService(db)
+        service.retriever = FailIfCalledRetriever()
+        llm = GeneralKnowledgeLLM()
+        service.llm_service = llm
+        principal = _principal()
+        session_id = uuid4()
+        first = await service.answer(
+            ChatQueryRequest(
+                session_id=session_id,
+                knowledge_base_ids=[],
+                query="Remember that the release name is Aurora.",
+                use_tools=False,
+            ),
+            request_id="history-query-test",
+            principal=principal,
+        )
+
+        events = [
+            event
+            async for event in service.stream_answer(
+                ChatQueryRequest(
+                    session_id=first.session_id,
+                    knowledge_base_ids=[],
+                    query="What release name did I mention?",
+                    use_tools=False,
+                ),
+                request_id="history-stream-test",
+                principal=principal,
+            )
+        ]
+
+        assert events[-1]["event"] == "done"
+        assert [item["role"] for item in llm.requests[-1]] == [
+            "system",
+            "user",
+            "assistant",
+            "user",
+        ]
+        assert "Aurora" in llm.requests[-1][1]["content"]
+        assert "What release name" in llm.requests[-1][-1]["content"]
 
 
 def test_session_document_presence_includes_documents_not_ready_for_retrieval(

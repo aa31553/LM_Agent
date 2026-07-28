@@ -3,10 +3,10 @@ document_id: lm-agent-fastapi-llm-reference
 document_type: api_contract_companion
 language: zh-TW
 api_name: LM Agent API
-api_version: 0.7.0
+api_version: 0.8.0
 base_path: /api/v1
 branch: codex/llmwiki-feature
-updated_at: 2026-07-27
+updated_at: 2026-07-28
 canonical_runtime_schema: GET /openapi.json
 human_guide: docs/FastAPI_Human_Guide.md
 legacy_detail: docs/Fastapi_spec.md
@@ -32,7 +32,7 @@ legacy_detail: docs/Fastapi_spec.md
 ```yaml
 service:
   title: LM Agent API
-  version: 0.7.0
+  version: 0.8.0
   base_path: /api/v1
   docs:
     swagger: /docs

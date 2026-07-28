@@ -124,6 +124,8 @@ LLM_API_PATH=/v1/chat/completions
 LLM_API_KEY=
 LLM_MODEL=your-internal-model-name
 LLM_REASONING_EFFORT=
+CHAT_HISTORY_MAX_TURNS=6
+CHAT_HISTORY_MAX_CHARS=8000
 ```
 
 The client sends both normal and streaming chat requests to the configured
@@ -514,6 +516,11 @@ Code Assistant uses separate `code` chat sessions. It accepts pasted code or tem
 session uploads (including `.py`, `.js`, `.ts`, `.json`, and `.md`), preserves normal
 chat history and LLM usage, and only retrieves technical documents that the caller may
 read. A `code` session cannot be reused by normal Chat, or vice versa.
+
+When an existing `session_id` is reused, normal Chat and Code Assistant automatically
+send a bounded, re-masked conversation history to the LLM. The same message construction
+is used for non-streaming, streaming, and tool-enabled requests. The current user message
+is excluded from history to prevent duplication.
 
 Standard error response:
 

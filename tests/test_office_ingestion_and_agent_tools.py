@@ -6,13 +6,13 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from app.core.constants import ConfidentialLevel
+from app.core.security import Principal
 from app.integrations.openai_compatible_client import (
     ChatCompletionResult,
     ChatToolCall,
     OpenAICompatibleClient,
 )
-from app.core.constants import ConfidentialLevel
-from app.core.security import Principal
 from app.services.agent_tool_service import AgentToolService
 from app.services.chunking_service import ChunkingService
 from app.services.office_parser_service import OfficeParserService
@@ -179,6 +179,14 @@ async def test_agent_tool_service_runs_tool_loop() -> None:
         async def complete_messages(self, messages, tools=None, tool_choice=None):
             self.calls += 1
             if self.calls == 1:
+                assert [message["role"] for message in messages] == [
+                    "system",
+                    "user",
+                    "assistant",
+                    "user",
+                ]
+                assert messages[1]["content"] == "Earlier question"
+                assert messages[2]["content"] == "Earlier answer"
                 return ChatCompletionResult(
                     content="",
                     tool_calls=[
@@ -207,6 +215,12 @@ async def test_agent_tool_service_runs_tool_loop() -> None:
     result = await FakeAgentToolService(llm_service=FakeLLMService()).answer_with_tools(
         system_prompt="system",
         user_prompt="user",
+        messages=[
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "Earlier question"},
+            {"role": "assistant", "content": "Earlier answer"},
+            {"role": "user", "content": "user"},
+        ],
         knowledge_base_ids=[uuid4()],
         top_k=3,
         use_rerank=False,

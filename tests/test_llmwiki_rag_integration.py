@@ -6,6 +6,7 @@ from sqlalchemy import delete, text
 from app.core.constants import ConfidentialLevel, DocumentStatus
 from app.core.security import Principal
 from app.db.session import SessionLocal
+from app.integrations.openai_compatible_client import ChatCompletionResult
 from app.models.audit import AuditEvent, LLMCallLog, RetrievalLog
 from app.models.chat import ChatMessage, ChatSession
 from app.models.document import Document
@@ -25,30 +26,28 @@ class EmptyRetriever:
 
 
 class LLMWikiReferenceLLM:
-    async def complete(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        image_paths: list[str] | None = None,
-    ) -> str:
+    async def complete_messages(self, messages, tools=None, tool_choice=None):
+        user_prompt = messages[-1]["content"]
         assert "LLMWiki compiled knowledge context:" in user_prompt
         assert "[LLMWiki:alphatopic-quality]" in user_prompt
         assert "durable compiled knowledge" in user_prompt
-        assert image_paths == []
-        return (
-            "1. Answer\n"
-            "AlphaTopic Quality should use durable compiled knowledge pages that preserve "
-            "evidence, cross-links, and maintenance notes across questions.\n"
-            "2. Key points\n"
-            "- Compile summaries once and keep evidence attached.\n"
-            "- Use cross-links to connect related topics.\n"
-            "- Review maintenance notes before operational use.\n"
-            "3. Sources\n"
-            "- LLMWiki: alphatopic-quality compiled page.\n"
-            "4. Confidence\n"
-            "High for the test fixture.\n"
-            "5. Limitations\n"
-            "This answer is limited to the compiled LLMWiki page."
+        return ChatCompletionResult(
+            content=(
+                "1. Answer\n"
+                "AlphaTopic Quality should use durable compiled knowledge pages that preserve "
+                "evidence, cross-links, and maintenance notes across questions.\n"
+                "2. Key points\n"
+                "- Compile summaries once and keep evidence attached.\n"
+                "- Use cross-links to connect related topics.\n"
+                "- Review maintenance notes before operational use.\n"
+                "3. Sources\n"
+                "- LLMWiki: alphatopic-quality compiled page.\n"
+                "4. Confidence\n"
+                "High for the test fixture.\n"
+                "5. Limitations\n"
+                "This answer is limited to the compiled LLMWiki page."
+            ),
+            tool_calls=[],
         )
 
 

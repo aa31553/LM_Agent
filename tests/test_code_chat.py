@@ -12,6 +12,7 @@ from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.db.base import Base
 from app.db.session import create_database_engine, get_db
+from app.integrations.openai_compatible_client import ChatCompletionResult
 from app.main import create_app
 from app.models.chat import ChatSession
 from app.schemas.chat import CodeChatRequest
@@ -44,14 +45,18 @@ def run(connection, query):
 ```
 """
 
-    async def complete(self, system_prompt, user_prompt, image_paths=None):
-        assert "internal company code assistant" in system_prompt
-        assert "Supplied code" in user_prompt
-        assert image_paths == []
-        return self.answer
+    def __init__(self) -> None:
+        self.requests: list[list[dict]] = []
 
-    async def stream_complete(self, system_prompt, user_prompt, image_paths=None):
-        assert "internal company code assistant" in system_prompt
+    async def complete_messages(self, messages, tools=None, tool_choice=None):
+        self.requests.append(messages)
+        assert "internal company code assistant" in messages[0]["content"]
+        assert "Supplied code" in messages[-1]["content"]
+        return ChatCompletionResult(content=self.answer, tool_calls=[])
+
+    async def stream_complete_messages(self, messages):
+        self.requests.append(messages)
+        assert "internal company code assistant" in messages[0]["content"]
         yield self.answer[:80]
         yield self.answer[80:]
 
@@ -129,6 +134,30 @@ async def test_code_chat_stream_returns_structured_done_response(code_client) ->
         assert [event["event"] for event in events] == ["start", "delta", "delta", "done"]
         assert events[-1]["response"].chat_type == ChatType.CODE
         assert events[-1]["response"].code_blocks[0].language == "python"
+
+
+@pytest.mark.asyncio
+async def test_code_chat_includes_prior_session_messages(code_client) -> None:
+    _, session_factory = code_client
+    with session_factory() as db:
+        service = CodeChatService(db)
+        llm = CodeLLM()
+        service.rag_service.llm_service = llm
+        first = await service.answer(_payload(), "code-history-1", _principal())
+        follow_up = _payload().model_copy(
+            update={
+                "session_id": first.session_id,
+                "query": "How should I test that fix?",
+                "code": None,
+            }
+        )
+        await service.answer(follow_up, "code-history-2", _principal())
+
+        roles = [message["role"] for message in llm.requests[-1]]
+        assert roles == ["system", "user", "assistant", "user"]
+        assert "Why does this database helper fail?" in llm.requests[-1][1]["content"]
+        assert CodeLLM.answer.strip() == llm.requests[-1][2]["content"]
+        assert "How should I test that fix?" in llm.requests[-1][-1]["content"]
 
 
 def test_code_file_upload_creates_code_session(code_client) -> None:

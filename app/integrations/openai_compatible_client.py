@@ -89,12 +89,21 @@ class OpenAICompatibleClient:
         user_prompt: str,
         image_paths: list[str] | None = None,
     ) -> AsyncIterator[str]:
-        payload = {
-            "model": settings.llm_model,
-            "messages": [
+        async for chunk in self.stream_chat_completion_messages(
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._user_content(user_prompt, image_paths or [])},
-            ],
+            ]
+        ):
+            yield chunk
+
+    async def stream_chat_completion_messages(
+        self,
+        messages: list[dict[str, Any]],
+    ) -> AsyncIterator[str]:
+        payload = {
+            "model": settings.llm_model,
+            "messages": messages,
             "temperature": settings.llm_temperature,
             "top_p": settings.llm_top_p,
             "max_tokens": settings.llm_max_tokens,

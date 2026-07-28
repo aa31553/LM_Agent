@@ -1,6 +1,7 @@
 import json
 import time
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -11,10 +12,10 @@ from app.core.security import Principal
 from app.integrations.openai_compatible_client import ChatToolCall
 from app.repositories.document_repository import DocumentRepository
 from app.schemas.chat import ToolCallTrace
+from app.services.keyword_search_service import KeywordSearchService
 from app.services.llm_service import LLMService
 from app.services.permission_service import PermissionService
 from app.services.rerank_service import RerankService
-from app.services.keyword_search_service import KeywordSearchService
 
 
 @dataclass(frozen=True)
@@ -45,12 +46,13 @@ class AgentToolService:
         top_k: int,
         use_rerank: bool,
         principal: Principal,
+        messages: list[dict[str, Any]] | None = None,
     ) -> AgentAnswer:
         started = time.perf_counter()
-        messages: list[dict] = [
+        messages = list(messages or [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
-        ]
+        ])
         first = await self.llm_service.complete_messages(
             messages=messages,
             tools=self.tool_schemas(),

@@ -7,6 +7,7 @@ from sqlalchemy import delete
 from app.core.constants import ConfidentialLevel, DocumentStatus
 from app.core.security import Principal
 from app.db.session import SessionLocal
+from app.integrations.openai_compatible_client import ChatCompletionResult
 from app.main import create_app
 from app.models.audit import AuditEvent, LLMCallLog, RetrievalLog
 from app.models.chat import ChatMessage, ChatSession
@@ -16,8 +17,7 @@ from app.models.document_image import DocumentImage
 from app.models.knowledge_base import KnowledgeBase
 from app.models.masking import MaskingEvent
 from app.models.user import User
-from app.schemas.chat import ChatQueryRequest
-from app.schemas.chat import ToolCallTrace
+from app.schemas.chat import ChatQueryRequest, ToolCallTrace
 from app.services.agent_tool_service import AgentAnswer
 from app.services.rag_service import RAGService
 from app.services.vector_store_service import RetrievedChunk
@@ -32,17 +32,15 @@ class FakeRetriever:
 
 
 class FakeLLMService:
-    async def complete(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        image_paths: list[str] | None = None,
-    ) -> str:
+    async def complete_messages(self, messages, tools=None, tool_choice=None):
+        user_prompt = messages[-1]["content"]
         assert "record unique phrase" in user_prompt
         assert "Image context:" in user_prompt
         assert "Figure 2 Record workflow" in user_prompt
-        assert image_paths == []
-        return "The record unique phrase is available for owner@example.com."
+        return ChatCompletionResult(
+            content="The record unique phrase is available for owner@example.com.",
+            tool_calls=[],
+        )
 
 
 class FakeAgentToolService:

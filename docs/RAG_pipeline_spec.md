@@ -17,6 +17,8 @@ Auth / Permission Check
   ↓
 Query DLP / Masking
   ↓
+Load bounded Session history / Re-mask
+  ↓
 Query Preprocess
   ↓
 Query Embedding
@@ -31,7 +33,9 @@ Context DLP / Masking
   ↓
 Prompt Build
   ↓
-LLM Call
+Build messages: system + history + current RAG prompt
+  ↓
+LLM Call / Tool loop / Stream
   ↓
 Response DLP Scan
   ↓
@@ -172,6 +176,11 @@ Store Chunks and Vectors
 5. 抽取關鍵詞。
 6. 判斷問題類型。
 7. 必要時進行 query rewrite。
+
+同一 Session 的歷史對話從 `chat_messages` 直接讀取，排除本次已記錄的 user message，
+僅使用 `final_content` 或 `masked_content`。歷史會再次經過 DLP，並依
+`CHAT_HISTORY_MAX_TURNS` 與 `CHAT_HISTORY_MAX_CHARS` 從最新回合向前截取。一般 Chat、
+Code Chat、工具模式與串流模式共用同一個 messages builder。
 
 ---
 
