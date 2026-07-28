@@ -184,6 +184,27 @@ def test_code_chat_routes_are_published_in_openapi(code_client) -> None:
     assert "/api/v1/code-chat/stream" in paths
 
 
+def test_code_chat_sse_uses_real_event_delimiters(code_client, monkeypatch) -> None:
+    client, _ = code_client
+
+    async def fake_stream_answer(self, payload, request_id, principal):
+        yield {"event": "start", "request_id": request_id}
+        yield {"event": "delta", "text": "ok"}
+
+    monkeypatch.setattr(CodeChatService, "stream_answer", fake_stream_answer)
+    response = client.post(
+        "/api/v1/code-chat/stream",
+        headers={"Authorization": "Bearer admin", "X-Request-ID": "sse-format"},
+        json=_payload().model_dump(mode="json"),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: start\ndata: " in response.text
+    assert "\n\nevent: delta\ndata: " in response.text
+    assert "\\ndata:" not in response.text
+
+
 def test_code_assistant_defaults_to_no_permanent_knowledge_base() -> None:
     source = (Path(__file__).parents[1] / "frontend" / "app.js").read_text(encoding="utf-8")
 

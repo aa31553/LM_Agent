@@ -403,12 +403,27 @@ user／assistant 訊息，使模型能理解「剛才」、「它」等多輪語
 ```env
 CHAT_HISTORY_MAX_TURNS=6
 CHAT_HISTORY_MAX_CHARS=8000
+CHAT_REQUEST_TIMEOUT_SECONDS=180
+CHAT_QUEUE_TIMEOUT_SECONDS=15
+CHAT_MAX_CONCURRENT_REQUESTS=4
+LLM_CONTEXT_WINDOW_TOKENS=32768
+LLM_PROMPT_SAFETY_MARGIN_TOKENS=1024
+CODE_CONTEXT_MAX_TOKENS=12000
+CODE_CONTEXT_MAX_CHARS=60000
+AGENT_TOOL_PROMPT_RESERVE_TOKENS=4096
+AGENT_TOOL_CONTEXT_MAX_CHARS=12000
 ```
 
 history 不會再次加入本次已寫入資料庫的 user 訊息；只讀取 `final_content` 或
 `masked_content`，並在送給 LLM 前重新執行 DLP。歷史資料會標記為不可信參考內容，
 不得覆蓋 system 規則。若 `session_id` 為空或為新 Session，第一次問答仍只有本次
 prompt。
+
+所有聊天入口共用併發限制與整體 deadline。user message 會先提交；檢索、遮罩與
+prompt 組裝產生的稽核資料也會在呼叫 LLM 前提交，因此等待模型期間不持有
+PostgreSQL transaction。完整 `messages` 若超過模型 context window 預算，會先移除
+最舊歷史；仍超限則回傳 `PROMPT_TOO_LARGE`，不會送往上游。Tools 另保留第二輪
+tool result 的 token／字元空間。
 
 Response:
 

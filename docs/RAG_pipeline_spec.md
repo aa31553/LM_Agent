@@ -182,6 +182,11 @@ Store Chunks and Vectors
 `CHAT_HISTORY_MAX_TURNS` 與 `CHAT_HISTORY_MAX_CHARS` 從最新回合向前截取。一般 Chat、
 Code Chat、工具模式與串流模式共用同一個 messages builder。
 
+在送出上游 LLM 前，系統會依 `LLM_CONTEXT_WINDOW_TOKENS` 扣除輸出 token、
+安全保留量與可選的 Tool 結果保留量，檢查完整 messages。Code Chat 的貼上程式碼
+另受 `CODE_CONTEXT_MAX_TOKENS`／`CODE_CONTEXT_MAX_CHARS` 限制。user message 與
+前處理稽核資料會分段提交，LLM 生成期間不保持 PostgreSQL transaction。
+
 ---
 
 ### 5.1 問題類型

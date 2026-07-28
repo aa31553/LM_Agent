@@ -10,6 +10,7 @@ from app.schemas.chat import (
     CodeDiagnosis,
     SuggestedCodeChange,
 )
+from app.services.prompt_budget_service import PromptBudgetService
 from app.services.rag_service import RAGService
 from app.utils.llm_usage import get_llm_token_usage
 
@@ -27,6 +28,7 @@ class CodeChatService:
 
     def __init__(self, db=None) -> None:
         self.rag_service = RAGService(db=db)
+        self.prompt_budget_service = PromptBudgetService()
 
     async def answer(
         self,
@@ -65,6 +67,7 @@ class CodeChatService:
     def _code_context(self, payload: CodeChatRequest) -> str:
         if not payload.code:
             return ""
+        code, truncated = self.prompt_budget_service.truncate_code(payload.code)
         metadata = []
         if payload.file_name:
             metadata.append(f"File: {payload.file_name}")
@@ -73,8 +76,10 @@ class CodeChatService:
         if payload.line_start is not None:
             end = payload.line_end or payload.line_start
             metadata.append(f"Lines: {payload.line_start}-{end}")
+        if truncated:
+            metadata.append("Prompt note: code was truncated to the configured safe input budget")
         prefix = "\n".join(metadata)
-        return f"{prefix}\n\n{payload.code}" if prefix else payload.code
+        return f"{prefix}\n\n{code}" if prefix else code
 
     def _structured_response(self, response) -> CodeChatResponse:
         sections = self._split_sections(response.answer)

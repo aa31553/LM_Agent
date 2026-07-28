@@ -24,6 +24,8 @@ const state = {
   skills: [],
   selectedSkillName: localStorage.getItem("lmAgentSkillName") || "",
   llmwikiPage: null,
+  chatController: null,
+  codeChatController: null,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -101,6 +103,7 @@ async function api(path, options = {}) {
     method: options.method || "GET",
     headers,
     body,
+    signal: options.signal,
   });
   if (response.status === 204) return null;
   const contentType = response.headers.get("content-type") || "";
@@ -1427,6 +1430,7 @@ function renderChat() {
           <div class="actions">
             <button class="primary" id="askBtn">送出</button>
             <button id="streamBtn">串流</button>
+            <button class="warning" id="cancelChatBtn" hidden>取消</button>
             <button id="messagesBtn">訊息</button>
             <button class="danger" id="deleteSessionBtn">刪除 Session</button>
           </div>
@@ -1456,6 +1460,7 @@ function renderChat() {
   $("#sessionIdInput").value = state.sessionId;
   $("#askBtn").addEventListener("click", askQuestion);
   $("#streamBtn").addEventListener("click", streamQuestion);
+  $("#cancelChatBtn").addEventListener("click", () => state.chatController?.abort());
   $("#messagesBtn").addEventListener("click", loadSessionMessages);
   $("#deleteSessionBtn").addEventListener("click", deleteSession);
   syncKbSelectors();
@@ -1527,8 +1532,16 @@ function renderUsage(usage) {
 }
 
 async function askQuestion() {
+  if (state.chatController) return;
+  const controller = new AbortController();
+  state.chatController = controller;
+  setChatBusy(true);
   try {
-    const payload = await api("/chat/query", { method: "POST", json: chatPayload() });
+    const payload = await api("/chat/query", {
+      method: "POST",
+      json: chatPayload(),
+      signal: controller.signal,
+    });
     state.sessionId = payload.session_id;
     localStorage.setItem("lmAgentSessionId", state.sessionId);
     $("#sessionIdInput").value = state.sessionId;
@@ -1536,11 +1549,18 @@ async function askQuestion() {
     renderChatResponse(payload);
     writeOutput("#chatOutput", payload);
   } catch (error) {
-    writeOutput("#chatOutput", errorPayload(error));
+    writeOutput("#chatOutput", requestErrorPayload(error));
+  } finally {
+    if (state.chatController === controller) state.chatController = null;
+    setChatBusy(false);
   }
 }
 
 async function streamQuestion() {
+  if (state.chatController) return;
+  const controller = new AbortController();
+  state.chatController = controller;
+  setChatBusy(true);
   try {
     const payload = chatPayload();
     renderChatResponse(null);
@@ -1553,6 +1573,7 @@ async function streamQuestion() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(await response.text());
     const reader = response.body.getReader();
@@ -1570,6 +1591,7 @@ async function streamQuestion() {
         if (!dataLine) continue;
         const data = JSON.parse(dataLine.slice(6));
         events.push(data);
+        if (data.event === "error" || data.error_code) throw streamEventError(data);
         const delta = typeof data.text === "string" ? data.text : data.delta;
         if (typeof delta === "string") $("#answerOutput").textContent += delta;
         if (data.response) {
@@ -1583,8 +1605,17 @@ async function streamQuestion() {
     }
     writeOutput("#chatOutput", events);
   } catch (error) {
-    writeOutput("#chatOutput", errorPayload(error));
+    writeOutput("#chatOutput", requestErrorPayload(error));
+  } finally {
+    if (state.chatController === controller) state.chatController = null;
+    setChatBusy(false);
   }
+}
+
+function setChatBusy(busy) {
+  if ($("#askBtn")) $("#askBtn").disabled = busy;
+  if ($("#streamBtn")) $("#streamBtn").disabled = busy;
+  if ($("#cancelChatBtn")) $("#cancelChatBtn").hidden = !busy;
 }
 
 async function loadSessionMessages() {
@@ -1602,7 +1633,7 @@ function renderCodeAssistant() {
     <div class="grid">
       <div class="grid two">
         <div class="panel">
-          <div class="panel-header"><h2>程式碼提問</h2><div class="actions"><button id="codeAskBtn" class="primary">送出</button><button id="codeStreamBtn">串流送出</button></div></div>
+          <div class="panel-header"><h2>程式碼提問</h2><div class="actions"><button id="codeAskBtn" class="primary">送出</button><button id="codeStreamBtn">串流送出</button><button id="codeCancelBtn" class="warning" hidden>取消</button></div></div>
           <div class="form-grid">
             <label class="wide">問題<textarea id="codeQuery" placeholder="例如：這段程式為何會在資料庫連線中斷時失敗？"></textarea></label>
             <label>語言<input id="codeLanguage" placeholder="python" /></label><label>檔名<input id="codeFileName" placeholder="service.py" /></label>
@@ -1624,6 +1655,7 @@ function renderCodeAssistant() {
     </div>`;
   $("#codeSessionIdInput").value = state.codeSessionId;
   $("#codeAskBtn").addEventListener("click", askCodeQuestion); $("#codeStreamBtn").addEventListener("click", streamCodeQuestion);
+  $("#codeCancelBtn").addEventListener("click", () => state.codeChatController?.abort());
   $("#codeLoadFileBtn").addEventListener("click", loadCodeFileIntoPrompt); $("#codeUploadFileBtn").addEventListener("click", uploadCodeFile);
   $("#codeMessagesBtn").addEventListener("click", loadCodeSessionMessages); $("#codeDeleteSessionBtn").addEventListener("click", deleteCodeSession); syncKbSelectors();
 }
@@ -1645,11 +1677,94 @@ function renderCodeResponse(payload) {
   const blocks = $("#codeBlocksOutput"); blocks.replaceChildren(); for (const block of payload?.code_blocks || []) { const section = document.createElement("section"); const label = document.createElement("div"); label.className = "code-block-label"; label.textContent = block.language || "code"; const pre = document.createElement("pre"); const code = document.createElement("code"); code.textContent = block.code; pre.appendChild(code); section.append(label, pre); blocks.appendChild(section); } blocks.hidden = blocks.childElementCount === 0;
   renderUsageFor("#codeUsageOutput", payload?.usage);
 }
-async function askCodeQuestion() { try { const payload = await api("/code-chat/query", { method: "POST", json: codeChatPayload() }); rememberCodeSession(payload.session_id); renderCodeResponse(payload); writeOutput("#codeOutput", payload); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
+async function askCodeQuestion() {
+  if (state.codeChatController) return;
+  const controller = new AbortController();
+  state.codeChatController = controller;
+  setCodeChatBusy(true);
+  try {
+    const payload = await api("/code-chat/query", {
+      method: "POST",
+      json: codeChatPayload(),
+      signal: controller.signal,
+    });
+    rememberCodeSession(payload.session_id);
+    renderCodeResponse(payload);
+    writeOutput("#codeOutput", payload);
+  } catch (error) {
+    writeOutput("#codeOutput", requestErrorPayload(error));
+  } finally {
+    if (state.codeChatController === controller) state.codeChatController = null;
+    setCodeChatBusy(false);
+  }
+}
 async function streamCodeQuestion() {
-  try { const payload = codeChatPayload(); renderCodeResponse(null); writeOutput("#codeOutput", "streaming..."); const response = await fetch(`${API_PREFIX}/code-chat/stream`, { method: "POST", headers: { Authorization: `Bearer ${state.token}`, "X-Request-ID": state.requestId, "Content-Type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) throw new Error(await response.text()); const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ""; const events = [];
-    while (true) { const { value, done } = await reader.read(); if (done) break; buffer += decoder.decode(value, { stream: true }); const parts = buffer.split("\n\n"); buffer = parts.pop() || ""; for (const part of parts) { const line = part.split("\n").find((item) => item.startsWith("data: ")); if (!line) continue; const event = JSON.parse(line.slice(6)); events.push(event); if (typeof event.text === "string") $("#codeAnswerOutput").textContent += event.text; if (event.response) { rememberCodeSession(event.response.session_id); renderCodeResponse(event.response); } } } writeOutput("#codeOutput", events);
-  } catch (error) { writeOutput("#codeOutput", errorPayload(error)); }
+  if (state.codeChatController) return;
+  const controller = new AbortController();
+  state.codeChatController = controller;
+  setCodeChatBusy(true);
+  try {
+    const payload = codeChatPayload();
+    renderCodeResponse(null);
+    writeOutput("#codeOutput", "streaming...");
+    const response = await fetch(`${API_PREFIX}/code-chat/stream`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+        "X-Request-ID": state.requestId,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const events = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+      for (const part of parts) {
+        const line = part.split("\n").find((item) => item.startsWith("data: "));
+        if (!line) continue;
+        const event = JSON.parse(line.slice(6));
+        events.push(event);
+        if (event.event === "error" || event.error_code) throw streamEventError(event);
+        if (typeof event.text === "string") $("#codeAnswerOutput").textContent += event.text;
+        if (event.response) {
+          rememberCodeSession(event.response.session_id);
+          renderCodeResponse(event.response);
+        }
+      }
+    }
+    writeOutput("#codeOutput", events);
+  } catch (error) {
+    writeOutput("#codeOutput", requestErrorPayload(error));
+  } finally {
+    if (state.codeChatController === controller) state.codeChatController = null;
+    setCodeChatBusy(false);
+  }
+}
+function setCodeChatBusy(busy) {
+  if ($("#codeAskBtn")) $("#codeAskBtn").disabled = busy;
+  if ($("#codeStreamBtn")) $("#codeStreamBtn").disabled = busy;
+  if ($("#codeCancelBtn")) $("#codeCancelBtn").hidden = !busy;
+}
+function streamEventError(event) {
+  const error = new Error(event.message || "串流處理失敗");
+  error.status = event.status_code;
+  error.payload = event;
+  return error;
+}
+function requestErrorPayload(error) {
+  if (error?.name === "AbortError") {
+    return { status: "cancelled", message: "請求已由使用者取消。", details: null };
+  }
+  return errorPayload(error);
 }
 async function loadCodeFileIntoPrompt() { try { const file = $("#codeFileInput").files[0]; if (!file) throw new Error("請先選擇程式檔"); $("#codeInput").value = await file.text(); if (!$("#codeFileName").value) $("#codeFileName").value = file.name; if (!$("#codeLanguage").value) $("#codeLanguage").value = file.name.split(".").pop().toLowerCase(); showAlert("已載入檔案，本次提問會直接包含其內容。", "success"); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }
 async function uploadCodeFile() { try { const file = $("#codeFileInput").files[0]; if (!file) throw new Error("請先選擇程式檔"); const form = new FormData(); form.append("file", file); form.append("scope", "session"); form.append("chat_type", "code"); form.append("confidential_level", "internal"); if (state.codeSessionId) form.append("session_id", state.codeSessionId); const payload = await api("/documents/upload", { method: "POST", body: form }); rememberCodeSession(payload.session_id); writeOutput("#codeOutput", payload); showAlert("程式檔已暫存並排入索引；完成後可作為本 Code Session 的授權檢索內容。", "success"); await refreshDocuments(); } catch (error) { writeOutput("#codeOutput", errorPayload(error)); } }

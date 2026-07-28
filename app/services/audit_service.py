@@ -84,12 +84,17 @@ class AuditService:
             self.db.flush()
             return user
 
-        user.username = principal.username
-        user.department = principal.department
-        user.clearance_level = principal.clearance_level.value
-        user.is_active = principal.is_active
-        user.updated_at = datetime.utcnow()
-        self.db.flush()
+        values = {
+            "username": principal.username,
+            "department": principal.department,
+            "clearance_level": principal.clearance_level.value,
+            "is_active": principal.is_active,
+        }
+        if any(getattr(user, field) != value for field, value in values.items()):
+            for field, value in values.items():
+                setattr(user, field, value)
+            user.updated_at = datetime.utcnow()
+            self.db.flush()
         return user
 
     def ensure_session(

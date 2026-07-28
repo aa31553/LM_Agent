@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal
@@ -15,6 +16,7 @@ from app.schemas.chat import ToolCallTrace
 from app.services.keyword_search_service import KeywordSearchService
 from app.services.llm_service import LLMService
 from app.services.permission_service import PermissionService
+from app.services.prompt_budget_service import PromptBudgetService
 from app.services.rerank_service import RerankService
 
 
@@ -36,6 +38,7 @@ class AgentToolService:
         self.db = db
         self.llm_service = llm_service or LLMService()
         self.permission_service = PermissionService(db)
+        self.prompt_budget_service = PromptBudgetService()
 
     async def answer_with_tools(
         self,
@@ -53,6 +56,10 @@ class AgentToolService:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ])
+        messages = self.prompt_budget_service.fit_messages(
+            messages,
+            reserved_tokens=settings.agent_tool_prompt_reserve_tokens,
+        ).messages
         first = await self.llm_service.complete_messages(
             messages=messages,
             tools=self.tool_schemas(),
@@ -74,6 +81,7 @@ class AgentToolService:
             }
         )
         traces: list[ToolCallTrace] = []
+        remaining_tool_chars = settings.agent_tool_context_max_chars
         for tool_call in selected_tool_calls:
             arguments = self._decode_arguments(tool_call.arguments)
             result = await self.execute_tool(
@@ -95,10 +103,17 @@ class AgentToolService:
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": json.dumps(result, ensure_ascii=False),
+                    "content": self._bounded_tool_content(result, remaining_tool_chars),
                 }
             )
+            remaining_tool_chars = max(
+                0,
+                remaining_tool_chars - len(messages[-1]["content"]),
+            )
 
+        if self.db is not None:
+            self.db.commit()
+        self.prompt_budget_service.validate_messages(messages)
         final = await self.llm_service.complete_messages(messages=messages)
         return AgentAnswer(
             answer=final.content or first.content,
@@ -247,6 +262,18 @@ class AgentToolService:
                 "arguments": tool_call.arguments,
             },
         }
+
+    def _bounded_tool_content(self, result: dict, remaining_chars: int) -> str:
+        serialized = json.dumps(result, ensure_ascii=False)
+        if len(serialized) <= remaining_chars:
+            return serialized
+        if remaining_chars <= 0:
+            return ""
+        marker = '\n{"truncated":true}'
+        if remaining_chars <= len(marker):
+            return marker[:remaining_chars]
+        keep = max(0, remaining_chars - len(marker))
+        return f"{serialized[:keep]}{marker}"
 
     def tool_schemas(self) -> list[dict]:
         return [

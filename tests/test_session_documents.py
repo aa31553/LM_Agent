@@ -51,6 +51,16 @@ class GeneralKnowledgeLLM:
         yield self.answer[12:]
 
 
+class TransactionCheckingLLM(GeneralKnowledgeLLM):
+    def __init__(self, db: Session) -> None:
+        super().__init__()
+        self.db = db
+
+    async def complete_messages(self, messages, tools=None, tool_choice=None):
+        assert self.db.in_transaction() is False
+        return await super().complete_messages(messages, tools=tools, tool_choice=tool_choice)
+
+
 @pytest.fixture
 def session_document_client(tmp_path: Path, monkeypatch):
     engine = create_database_engine("sqlite:///:memory:")
@@ -206,6 +216,28 @@ async def test_query_without_document_scope_uses_general_knowledge_mode(
         assert audit_event.event_metadata["answer_mode"] == "general_knowledge"
         assert audit_event.event_metadata["retrieval_skipped"] is True
         assert audit_event.event_metadata["session_documents_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_query_releases_database_transaction_before_llm_call(
+    session_document_client,
+) -> None:
+    _, session_factory, _ = session_document_client
+    with session_factory() as db:
+        service = RAGService(db)
+        service.retriever = FailIfCalledRetriever()
+        service.llm_service = TransactionCheckingLLM(db)
+
+        response = await service.answer(
+            ChatQueryRequest(
+                knowledge_base_ids=[],
+                query="請確認 LLM 呼叫前不持有資料庫 transaction",
+            ),
+            request_id="transaction-boundary-test",
+            principal=_principal(),
+        )
+
+        assert response.answer == GeneralKnowledgeLLM.answer
 
 
 @pytest.mark.asyncio

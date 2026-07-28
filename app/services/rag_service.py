@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -26,9 +27,12 @@ from app.services.image_context_service import ImageContextService
 from app.services.llm_service import LLMService
 from app.services.llmwiki_service import LLMWikiService
 from app.services.masking_service import MaskingService
+from app.services.prompt_budget_service import PromptBudgetService
 from app.services.skill_service import SkillService
 from app.services.vector_store_service import RetrievedChunk
 from app.utils.llm_usage import reset_llm_token_usage
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -52,6 +56,7 @@ class RAGService:
         self.image_context_service = ImageContextService(db)
         self.llmwiki_service = LLMWikiService(db)
         self.skill_service = SkillService()
+        self.prompt_budget_service = PromptBudgetService()
 
     async def answer(
         self,
@@ -64,6 +69,11 @@ class RAGService:
         finalize_response: bool = True,
     ) -> ChatQueryResponse:
         reset_llm_token_usage()
+        started_at = time.perf_counter()
+        logger.info(
+            "chat_request_started",
+            extra={"request_id": request_id, "chat_type": chat_type.value, "stream": False},
+        )
         user = self.audit_service.ensure_user(principal)
         session = self.audit_service.ensure_session(
             principal=principal,
@@ -107,6 +117,11 @@ class RAGService:
                 self.db.commit()
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains restricted information.", 400)
 
+        self._commit_pending()
+        logger.info(
+            "chat_user_message_committed",
+            extra={"request_id": request_id, "message_id": str(user_message.id)},
+        )
         requested_top_k = payload.top_k
         session_has_documents = self._session_has_documents(session.id)
         general_knowledge_mode = not payload.knowledge_base_ids and not session_has_documents
@@ -237,6 +252,24 @@ class RAGService:
             user_prompt=user_prompt,
             history=history,
         )
+        prompt_budget = self.prompt_budget_service.fit_messages(
+            conversation_messages,
+            reserved_tokens=(
+                settings.agent_tool_prompt_reserve_tokens if payload.use_tools else 0
+            ),
+        )
+        conversation_messages = prompt_budget.messages
+        self._commit_pending()
+        logger.info(
+            "chat_llm_started",
+            extra={
+                "request_id": request_id,
+                "message_id": str(user_message.id),
+                "estimated_prompt_tokens": prompt_budget.estimated_tokens,
+                "dropped_history_messages": prompt_budget.dropped_history_messages,
+                "use_tools": payload.use_tools,
+            },
+        )
         tool_traces = []
         if payload.use_tools:
             try:
@@ -320,6 +353,8 @@ class RAGService:
                 "history_message_count": len(history.messages),
                 "history_char_count": history.char_count,
                 "history_truncated": history.truncated,
+                "prompt_estimated_tokens": prompt_budget.estimated_tokens,
+                "prompt_dropped_history_messages": prompt_budget.dropped_history_messages,
                 "assistant_message_id": str(assistant_message.id),
                 "llm_latency_ms": latency_ms,
             },
@@ -339,8 +374,15 @@ class RAGService:
                 risk_level=response_dlp.risk_level,
             )
 
-        if self.db is not None:
-            self.db.commit()
+        self._commit_pending()
+        logger.info(
+            "chat_request_committed",
+            extra={
+                "request_id": request_id,
+                "message_id": str(user_message.id),
+                "duration_ms": int((time.perf_counter() - started_at) * 1000),
+            },
+        )
 
         response = ChatQueryResponse(
                 request_id=request_id,
@@ -373,6 +415,11 @@ class RAGService:
         finalize_response: bool = True,
     ) -> AsyncIterator[dict[str, Any]]:
         reset_llm_token_usage()
+        started_at = time.perf_counter()
+        logger.info(
+            "chat_request_started",
+            extra={"request_id": request_id, "chat_type": chat_type.value, "stream": True},
+        )
         user = self.audit_service.ensure_user(principal)
         session = self.audit_service.ensure_session(
             principal=principal,
@@ -400,12 +447,6 @@ class RAGService:
                 self.db.commit()
             raise APIError(ErrorCode.DLP_BLOCKED, "The supplied code contains restricted information.", 400)
         code_context = code_dlp.text
-        yield {
-            "event": "start",
-            "request_id": request_id,
-            "session_id": str(session.id),
-            "message_id": str(user_message.id),
-        }
         if self._block_prompt_injection(payload.query, request_id, user.id, user_message.id):
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains prompt injection content.", 400)
 
@@ -423,6 +464,17 @@ class RAGService:
                 self.db.commit()
             raise APIError(ErrorCode.DLP_BLOCKED, "The request contains restricted information.", 400)
 
+        self._commit_pending()
+        logger.info(
+            "chat_user_message_committed",
+            extra={"request_id": request_id, "message_id": str(user_message.id)},
+        )
+        yield {
+            "event": "start",
+            "request_id": request_id,
+            "session_id": str(session.id),
+            "message_id": str(user_message.id),
+        }
         requested_top_k = payload.top_k
         session_has_documents = self._session_has_documents(session.id)
         general_knowledge_mode = not payload.knowledge_base_ids and not session_has_documents
@@ -556,6 +608,24 @@ class RAGService:
             user_prompt=user_prompt,
             history=history,
         )
+        prompt_budget = self.prompt_budget_service.fit_messages(
+            conversation_messages,
+            reserved_tokens=(
+                settings.agent_tool_prompt_reserve_tokens if payload.use_tools else 0
+            ),
+        )
+        conversation_messages = prompt_budget.messages
+        self._commit_pending()
+        logger.info(
+            "chat_llm_started",
+            extra={
+                "request_id": request_id,
+                "message_id": str(user_message.id),
+                "estimated_prompt_tokens": prompt_budget.estimated_tokens,
+                "dropped_history_messages": prompt_budget.dropped_history_messages,
+                "use_tools": payload.use_tools,
+            },
+        )
 
         answer_parts: list[str] = []
         tool_traces = []
@@ -610,6 +680,17 @@ class RAGService:
                 async for delta in self.llm_service.stream_complete_messages(
                     conversation_messages
                 ):
+                    if not answer_parts:
+                        logger.info(
+                            "chat_first_token",
+                            extra={
+                                "request_id": request_id,
+                                "message_id": str(user_message.id),
+                                "first_token_ms": int(
+                                    (time.perf_counter() - started) * 1000
+                                ),
+                            },
+                        )
                     answer_parts.append(delta)
                     yield {"event": "delta", "text": delta}
             except Exception as exc:
@@ -677,6 +758,8 @@ class RAGService:
                 "history_message_count": len(history.messages),
                 "history_char_count": history.char_count,
                 "history_truncated": history.truncated,
+                "prompt_estimated_tokens": prompt_budget.estimated_tokens,
+                "prompt_dropped_history_messages": prompt_budget.dropped_history_messages,
                 "assistant_message_id": str(assistant_message.id),
                 "llm_latency_ms": latency_ms,
             },
@@ -685,8 +768,15 @@ class RAGService:
             target_id=user_message.id,
             risk_level=response_dlp.risk_level,
         )
-        if self.db is not None:
-            self.db.commit()
+        self._commit_pending()
+        logger.info(
+            "chat_request_committed",
+            extra={
+                "request_id": request_id,
+                "message_id": str(user_message.id),
+                "duration_ms": int((time.perf_counter() - started_at) * 1000),
+            },
+        )
 
         response = ChatQueryResponse(
                 request_id=request_id,
@@ -719,6 +809,10 @@ class RAGService:
             "LLM service response message does not contain text content.",
             status_code=502,
         )
+
+    def _commit_pending(self) -> None:
+        if self.db is not None:
+            self.db.commit()
 
     def _build_conversation_history(
         self,

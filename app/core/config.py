@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.8.0"
+    app_version: str = "0.9.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -43,10 +43,19 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_top_p: float = 0.9
     llm_max_tokens: int = 1536
+    llm_context_window_tokens: int = Field(default=32768, ge=2048)
+    llm_prompt_safety_margin_tokens: int = Field(default=1024, ge=0)
     llm_reasoning_effort: str = ""
     llm_send_images_to_model: bool = False
+    chat_request_timeout_seconds: float = Field(default=180.0, gt=0)
+    chat_queue_timeout_seconds: float = Field(default=15.0, gt=0)
+    chat_max_concurrent_requests: int = Field(default=4, ge=1, le=256)
     chat_history_max_turns: int = Field(default=6, ge=0, le=50)
     chat_history_max_chars: int = Field(default=8000, ge=0, le=100_000)
+    code_context_max_tokens: int = Field(default=12000, ge=256)
+    code_context_max_chars: int = Field(default=60000, ge=1000)
+    agent_tool_prompt_reserve_tokens: int = Field(default=4096, ge=0)
+    agent_tool_context_max_chars: int = Field(default=12000, ge=1000)
 
     retrieval_top_k: int = 20
     rerank_top_n: int = 8

@@ -1,7 +1,7 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/llmwiki-feature`  
-> API 版本：`0.8.0`
+> API 版本：`0.9.0`
 > 更新日期：2026-07-28
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。若要讓 LLM / Agent 解析 API 契約，請改讀 [FastAPI LLM Reference](FastAPI_LLM_Reference.md)。執行中的欄位與 schema 最終仍以 `GET /openapi.json` 為準。
@@ -190,6 +190,9 @@ Content-Type: application/json
 | 有文件來源但找不到相關內容 | 維持嚴格 RAG，不用通用知識補答 |
 
 串流版本為 `POST /api/v1/chat/stream`，回應 Content-Type 為 `text/event-stream`。
+一般 Chat 與 Code Chat 的同步、SSE 入口共用併發上限與整體處理逾時；繁忙時回傳
+`CHAT_BUSY`，超時回傳 `CHAT_TIMEOUT`。SSE 會以 `event: error` 傳送相同錯誤資訊。
+前端在等待期間會停用重複送出，並提供取消按鈕。
 
 同一 `session_id` 的最近對話會自動加入 LLM `messages`，一般問答、程式碼助理、
 非串流、SSE 與工具呼叫均使用相同規則。預設保留最近 6 輪、最多 8,000 字元，
@@ -208,6 +211,11 @@ user 訊息不會重複加入。
 `POST /api/v1/code-chat/stream`。請求可傳 `code`、`language`、`file_name` 與可選
 行號，並可選擇使用者有讀取權限的技術知識庫。回覆會分出診斷、建議修改、風險、
 程式碼區塊及 token usage。
+
+貼上的程式碼會先受 `CODE_CONTEXT_MAX_CHARS` 與 `CODE_CONTEXT_MAX_TOKENS` 限制；
+若需要截斷，保留開頭與結尾並加入省略標記。組合 system prompt、歷史、RAG、
+Skills 與本次問題後，系統再依 `LLM_CONTEXT_WINDOW_TOKENS` 做完整 prompt 預算檢查。
+過大的請求會在呼叫 LLM 前以 `PROMPT_TOO_LARGE` 拒絕，避免長時間占用上游推論服務。
 
 前端預設為「不使用技術知識庫」，不會沿用一般 Chat 或文件頁目前選取的知識庫；
 只有使用者在程式助理內主動選擇後，才會傳送對應的 `knowledge_base_ids`。即使未選

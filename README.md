@@ -124,8 +124,17 @@ LLM_API_PATH=/v1/chat/completions
 LLM_API_KEY=
 LLM_MODEL=your-internal-model-name
 LLM_REASONING_EFFORT=
+LLM_CONTEXT_WINDOW_TOKENS=32768
+LLM_PROMPT_SAFETY_MARGIN_TOKENS=1024
+CHAT_REQUEST_TIMEOUT_SECONDS=180
+CHAT_QUEUE_TIMEOUT_SECONDS=15
+CHAT_MAX_CONCURRENT_REQUESTS=4
 CHAT_HISTORY_MAX_TURNS=6
 CHAT_HISTORY_MAX_CHARS=8000
+CODE_CONTEXT_MAX_TOKENS=12000
+CODE_CONTEXT_MAX_CHARS=60000
+AGENT_TOOL_PROMPT_RESERVE_TOKENS=4096
+AGENT_TOOL_CONTEXT_MAX_CHARS=12000
 ```
 
 The client sends both normal and streaming chat requests to the configured
@@ -133,6 +142,12 @@ The client sends both normal and streaming chat requests to the configured
 the URL builder avoids creating a duplicated `/v1/v1/` path. The optional
 `reasoning_effort` request field is omitted unless the internal API explicitly
 supports it and `LLM_REASONING_EFFORT` is set to a value other than `none`.
+
+All general and code chat endpoints share the same concurrency limiter and
+end-to-end deadline. Database writes are committed before waiting for the LLM,
+so PostgreSQL transactions and pool connections are not held throughout model
+generation. Requests that exceed the model prompt budget are rejected before
+they reach the upstream service.
 
 An independent offline embedding server is included under
 `services/embedding_service/`. Start it on Windows with

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from uuid import UUID
 
@@ -10,14 +11,15 @@ from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
 from app.models.chat import ChatSession
+from app.schemas.chat import ChatMessage as ChatMessageSchema
 from app.schemas.chat import (
     ChatQueryRequest,
     ChatQueryResponse,
     ChatSessionDeleteResponse,
     ChatSessionMessages,
 )
-from app.schemas.chat import ChatMessage as ChatMessageSchema
 from app.services.audit_service import AuditService
+from app.services.chat_runtime_service import chat_runtime_service
 from app.services.rag_service import RAGService
 from app.services.session_service import SessionService
 
@@ -31,7 +33,12 @@ async def query(
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> ChatQueryResponse:
-    return await RAGService(db=db).answer(payload, request_id=request_id, principal=principal)
+    async with chat_runtime_service.request_slot():
+        return await RAGService(db=db).answer(
+            payload,
+            request_id=request_id,
+            principal=principal,
+        )
 
 
 @router.post("/stream")
@@ -42,14 +49,29 @@ async def stream_query(
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     async def event_generator():
-        async for event in RAGService(db=db).stream_answer(
-            payload,
-            request_id=request_id,
-            principal=principal,
-        ):
-            yield _sse_event(event)
+        try:
+            async with chat_runtime_service.request_slot():
+                async for event in RAGService(db=db).stream_answer(
+                    payload,
+                    request_id=request_id,
+                    principal=principal,
+                ):
+                    yield _sse_event(event)
+        except APIError as exc:
+            db.rollback()
+            yield _sse_event(_error_event(exc, request_id))
+        except asyncio.CancelledError:
+            db.rollback()
+            raise
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _sse_event(event: dict) -> str:
@@ -59,6 +81,17 @@ def _sse_event(event: dict) -> str:
     if response is not None and hasattr(response, "model_dump"):
         payload["response"] = response.model_dump(mode="json")
     return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _error_event(exc: APIError, request_id: str) -> dict:
+    return {
+        "event": "error",
+        "request_id": request_id,
+        "error_code": exc.error_code.value,
+        "message": exc.message,
+        "status_code": exc.status_code,
+        "details": exc.details,
+    }
 
 
 @router.delete("/sessions/{session_id}", response_model=ChatSessionDeleteResponse)
