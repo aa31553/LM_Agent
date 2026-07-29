@@ -1,3 +1,4 @@
+from app.models.analysis import AnalysisFile, AnalysisJob
 from app.models.audit import AuditEvent, LLMCallLog, RetrievalLog
 from app.models.chat import ChatMessage, ChatSession
 from app.models.document import Document, DocumentProcessingJob
@@ -10,6 +11,8 @@ from app.models.prompt import PromptTemplate
 from app.models.user import Role, User, user_roles
 
 __all__ = [
+    "AnalysisFile",
+    "AnalysisJob",
     "AuditEvent",
     "ChatMessage",
     "ChatSession",
