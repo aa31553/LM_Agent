@@ -462,7 +462,9 @@ Main API groups:
 | --- | --- | --- |
 | Health | `/api/v1/health` | Service and dependency health |
 | Chat | `/api/v1/chat` | RAG question answering |
+| Code Chat | `/api/v1/code-chat` | Code-oriented question answering |
 | Documents | `/api/v1/documents` | Document upload and management |
+| Analysis | `/api/v1/analysis` | Session-scoped XLSX/CSV deterministic analysis |
 | Skills | `/api/v1/skills` | Skill CRUD, bundled files, and raw previews |
 | Knowledge Bases | `/api/v1/knowledge-bases` | Knowledge base management |
 | LLMWiki | `/api/v1/llmwiki` | Durable compiled knowledge pages and graph |
@@ -506,7 +508,17 @@ Important endpoints:
 - `POST /api/v1/code-chat/query`
 - `POST /api/v1/code-chat/stream`
 - `GET /api/v1/chat/sessions/{session_id}/messages`
+- `GET /api/v1/chat/sessions/{session_id}/attachments`
+- `DELETE /api/v1/chat/sessions/{session_id}/attachments/{document_id}`
 - `DELETE /api/v1/chat/sessions/{session_id}`
+- `POST /api/v1/analysis/files/upload`
+- `GET /api/v1/analysis/files`
+- `GET /api/v1/analysis/files/{file_id}/inspect`
+- `DELETE /api/v1/analysis/files/{file_id}`
+- `POST /api/v1/analysis/plans/validate`
+- `POST /api/v1/analysis/jobs`
+- `GET /api/v1/analysis/jobs/{job_id}`
+- `POST /api/v1/analysis/jobs/{job_id}/explain`
 - `POST /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/audit/chat-logs`
@@ -526,6 +538,21 @@ empty list for session-only RAG. Deleting `/api/v1/chat/sessions/{session_id}` r
 the conversation and all of its temporary documents and local artifacts without
 affecting knowledge-base documents. See `docs/Fastapi_spec.md` or `/openapi.json` for
 the LLM-readable API contract.
+
+Chat and Code Chat can restrict retrieval with `attachment_ids` and
+`retrieval_scope`. Session attachment listing and single-attachment deletion are
+available under `/api/v1/chat/sessions/{session_id}/attachments`.
+
+Large XLSX/CSV files that require exact filtering, grouping, aggregation, or chart
+data use `/api/v1/analysis`, not document RAG. The analysis worker computes bounded
+table/chart JSON without executing model-generated Python or SQL:
+
+```bash
+python -m app.workers.analysis_tasks
+```
+
+See `docs/Frontend_File_Upload_Guide.md` for the complete frontend upload, polling,
+POST SSE, AnalysisPlan, and result-rendering workflow.
 
 Code Assistant uses separate `code` chat sessions. It accepts pasted code or temporary
 session uploads (including `.py`, `.js`, `.ts`, `.json`, and `.md`), preserves normal

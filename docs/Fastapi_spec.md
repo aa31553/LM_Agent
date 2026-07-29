@@ -1,6 +1,7 @@
 ## 文件版本入口
 
 - 給工程師、管理員與測試人員：[FastAPI Human Guide](FastAPI_Human_Guide.md)
+- 給前端串接檔案與分析流程：[Frontend File Upload Guide](Frontend_File_Upload_Guide.md)
 - 給 LLM、Agent 與程式碼產生器：[FastAPI LLM Reference](FastAPI_LLM_Reference.md)
 - 本文件保留詳細設計與歷史範例；執行時契約以 `GET /openapi.json` 為準。
 
@@ -8,6 +9,9 @@
 
 # 文件二：FastAPI API 規格書
 
+> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.10.0`；
+> 更新日期：2026-07-30。
+>
 > LLM / agent 讀取入口：本文件描述語意與生命週期；執行時的機器可讀 schema 為
 > `GET /openapi.json`。所有 UUID 均使用 RFC 4122 字串，所有未列出的欄位都應視為不支援。
 
@@ -30,7 +34,10 @@
 | --------------- | ------------------------- | ------ |
 | Health          | `/api/v1/health`          | 系統健康檢查 |
 | Chat            | `/api/v1/chat`            | 問答相關   |
+| Code Chat       | `/api/v1/code-chat`       | 程式碼問答 |
 | Documents       | `/api/v1/documents`       | 文件管理   |
+| Analysis        | `/api/v1/analysis`        | XLSX／CSV 確定性分析 |
+| Skills          | `/api/v1/skills`          | Skill 管理 |
 | Knowledge Bases | `/api/v1/knowledge-bases` | 知識庫管理  |
 | Permissions     | `/api/v1/permissions`     | 權限設定   |
 | Audit           | `/api/v1/audit`           | 稽核紀錄   |
@@ -141,6 +148,7 @@ Request fields:
 | scope              | string | 否  | `knowledge_base`（預設）或 `session` |
 | knowledge_base_id  | UUID   | 條件式 | `scope=knowledge_base` 時必填      |
 | session_id         | UUID   | 否  | `scope=session` 時可填；省略則建立新 Session |
+| chat_type          | string | 否  | `general`（預設）或 `code` |
 | confidential_level | string | 是  | 文件分級                         |
 | department         | string | 否  | 所屬部門                         |
 | document_type      | string | 否  | paper / report / sop / image |
@@ -166,6 +174,8 @@ Scope 規則（互斥）：
 - `session`：不得傳 `knowledge_base_id`；`session_id` 省略時由伺服器建立並回傳。
 - Session 文件不會出現在任何知識庫或 LLMWiki 中，只能由相同 `session_id` 的 Chat 請求檢索。
 - 一般使用者只能使用自己擁有的 Session；管理員可維運所有 Session。
+- 上傳成功僅代表已排入處理；前端必須輪詢文件狀態至 `ready` 後再送入問答。
+- 多檔 Session 上傳時，先取得第一檔回傳的 `session_id`，其餘檔案再帶入相同 ID。
 
 ---
 
@@ -291,6 +301,27 @@ Response:
 
 ---
 
+### 5.7 更新文件 Metadata
+
+```http
+PATCH /api/v1/documents/{document_id}
+Content-Type: application/json
+```
+
+可更新 `title`、`language`、`confidential_level`、`department`、`source_type` 與
+`version`。呼叫者需要文件 write 權限；回覆為完整 `DocumentDetail`。
+
+### 5.8 刪除文件
+
+```http
+DELETE /api/v1/documents/{document_id}
+```
+
+呼叫者需要文件 manage 權限。成功回傳 `204 No Content`，並清除文件、處理工作、
+切片、圖片、權限資料與本機 artifact。
+
+---
+
 ## 6. Knowledge Base API
 
 ### 6.1 建立知識庫
@@ -347,6 +378,34 @@ Response:
 
 ---
 
+### 6.3 查詢單一知識庫
+
+```http
+GET /api/v1/knowledge-bases/{knowledge_base_id}
+```
+
+呼叫者必須通過知識庫讀取權限，回覆為 `KnowledgeBaseResponse`。
+
+### 6.4 更新知識庫
+
+```http
+PATCH /api/v1/knowledge-bases/{knowledge_base_id}
+Content-Type: application/json
+```
+
+可更新 `name`、`description`、`owner_department`、`default_confidential_level` 與
+`is_active`。呼叫者必須是建立者、系統管理員，或具有知識庫 admin 權限。
+
+### 6.5 刪除知識庫
+
+```http
+DELETE /api/v1/knowledge-bases/{knowledge_base_id}
+```
+
+成功回傳 `204 No Content`，並刪除知識庫內文件與相關本機 artifact。操作不可復原。
+
+---
+
 ## 7. Chat API
 
 ### 7.1 一般問答
@@ -361,6 +420,8 @@ Request:
 {
   "session_id": "session-001",
   "knowledge_base_ids": ["kb-001"],
+  "attachment_ids": [],
+  "retrieval_scope": "auto",
   "query": "Please summarize the main defect detection methods discussed in the papers.",
   "top_k": 8,
   "use_rerank": true,
@@ -368,14 +429,16 @@ Request:
 }
 ```
 
-`knowledge_base_ids` 可省略或傳空陣列。檢索來源為指定知識庫，加上 `session_id`
-所綁定的 Session 文件；若只需要暫存文件，請傳空陣列：
+`knowledge_base_ids` 與 `attachment_ids` 各最多 20 筆。若只需要指定暫存附件，
+使用 `retrieval_scope=attachments_only`：
 
 ```json
 {
   "session_id": "2ecaed2e-49e5-4b95-b14c-438ef177b233",
   "knowledge_base_ids": [],
-  "query": "摘要我剛才上傳的文件",
+  "attachment_ids": ["<DOCUMENT_UUID>"],
+  "retrieval_scope": "attachments_only",
+  "query": "摘要我指定的附件",
   "top_k": 8,
   "use_rerank": true,
   "use_masking": true,
@@ -383,13 +446,15 @@ Request:
 }
 ```
 
-問答模式依文件來源自動切換：
+檢索範圍：
 
-| 條件 | 模式 | 行為 |
+| `retrieval_scope` | 行為 | 必要欄位 |
 |---|---|---|
-| 有指定 `knowledge_base_ids` | RAG | 執行知識庫與同 Session 文件檢索 |
-| 未指定知識庫，但 Session 存在任何文件紀錄 | Session RAG | 執行相同 Session 的文件檢索 |
-| 未指定知識庫，且 Session 完全沒有文件 | 通用知識 | 略過 Embedding、向量檢索與 Rerank，直接呼叫 LLM |
+| `auto` | 相容既有模式；明確傳附件時只查指定附件 | 視輸入而定 |
+| `attachments_only` | 只查 `attachment_ids` | `session_id`、非空附件 ID |
+| `session_attachments` | 查 Session 全部 ready 附件 | `session_id` |
+| `knowledge_bases_only` | 只查指定知識庫 | 非空知識庫 ID |
+| `session_and_knowledge_bases` | 合併 Session 與知識庫 | `session_id` |
 
 通用知識模式會明確告知 LLM 此次沒有提供或檢索到相關文獻，只能依通用知識
 回答，且不得捏造文件、文獻、引用、頁碼或來源連結。API 回應的 `citations` 與
@@ -559,7 +624,19 @@ Response:
 
 ---
 
-### 7.5 刪除 Session
+### 7.5 Session 附件管理
+
+```http
+GET /api/v1/chat/sessions/{session_id}/attachments
+DELETE /api/v1/chat/sessions/{session_id}/attachments/{document_id}
+```
+
+附件列表提供 `document_id`、`filename`、`file_type`、`status`、`source_type`、
+`page_count`、`chunk_count` 與 `created_at`。只允許 Session 擁有者或管理員操作。
+
+---
+
+### 7.6 刪除 Session
 
 ```http
 DELETE /api/v1/chat/sessions/{session_id}
@@ -575,6 +652,7 @@ Response:
 {
   "session_id": "2ecaed2e-49e5-4b95-b14c-438ef177b233",
   "deleted_documents": 1,
+  "deleted_analysis_files": 1,
   "deleted_messages": 4,
   "deleted_files": 3,
   "status": "deleted"
@@ -585,9 +663,146 @@ Response:
 
 ---
 
-## 8. Permission API
+## 8. Analysis API
 
-### 8.1 設定文件權限
+Analysis API 專門處理不進入知識庫的 `.xlsx`／`.csv` 精確分析。它不建立文件
+chunk 或 Embedding；後端依白名單 `AnalysisPlan` 執行確定性計算，LLM 僅能選擇性
+解釋已完成的結果。
+
+### 8.1 前端流程
+
+| 步驟 | Method | Route | 說明 |
+| --- | --- | --- | --- |
+| 1 | POST | `/api/v1/analysis/files/upload` | multipart 上傳；`session_id` 必填 |
+| 2 | GET | `/api/v1/analysis/files/{file_id}/inspect` | 取得 sheet、欄位、型別與樣本 |
+| 3 | POST | `/api/v1/analysis/plans/validate` | 驗證並正規化計畫 |
+| 4 | POST | `/api/v1/analysis/jobs` | 建立 Job，HTTP 202 |
+| 5 | GET | `/api/v1/analysis/jobs/{job_id}` | 輪詢 `queued/running/completed/failed` |
+| 6 | POST | `/api/v1/analysis/jobs/{job_id}/explain` | 完成後可選擇由 LLM 解說 |
+| 管理 | GET | `/api/v1/analysis/files?session_id=...` | 列出 Session 分析檔 |
+| 管理 | DELETE | `/api/v1/analysis/files/{file_id}` | 刪除檔案及其 Jobs |
+
+分析 Worker 必須獨立啟動：
+
+```bash
+python -m app.workers.analysis_tasks
+```
+
+### 8.2 上傳
+
+```http
+POST /api/v1/analysis/files/upload
+Content-Type: multipart/form-data
+```
+
+| 欄位 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `file` | binary | 是 | 只接受 `.xlsx`、`.csv` |
+| `session_id` | UUID | 是 | Session 擁有者或 admin |
+| `confidential_level` | enum | 否 | 預設 `internal` |
+
+Response：
+
+```json
+{
+  "file_id": "<FILE_UUID>",
+  "session_id": "<SESSION_UUID>",
+  "filename": "production.xlsx",
+  "file_type": "xlsx",
+  "size_bytes": 182400,
+  "status": "ready",
+  "expires_at": "2026-08-06T10:00:00"
+}
+```
+
+### 8.3 AnalysisPlan
+
+```json
+{
+  "file_id": "<FILE_UUID>",
+  "plan": {
+    "sheet": "Production",
+    "select": [],
+    "group_by": ["Machine"],
+    "filters": [
+      {"column": "Yield", "operator": "gte", "value": 80}
+    ],
+    "aggregations": [
+      {"function": "count", "alias": "sample_count"},
+      {"function": "mean", "column": "Yield", "alias": "mean_yield"}
+    ],
+    "sort": [
+      {"column": "mean_yield", "direction": "asc"}
+    ],
+    "limit": 1000,
+    "charts": [
+      {
+        "type": "bar",
+        "x_field": "Machine",
+        "y_field": "mean_yield",
+        "title": "Average yield by machine"
+      }
+    ]
+  }
+}
+```
+
+限制：
+
+- `select` 或 `aggregations` 至少一個非空。
+- filter operator：`eq/ne/gt/gte/lt/lte/contains/in/is_null/not_null`。
+- aggregation：`count/sum/mean/std/min/max/count_if`。
+- chart：`bar/line/scatter`。
+- aggregation alias 必須唯一，且不得與 `group_by` 欄名相同。API 0.10.0 尚未完整
+  阻擋碰撞，前端必須先驗證。
+- 無 aggregation 時不支援 raw-row sort。
+
+### 8.4 結果
+
+完成的 `AnalysisJobResponse.result`：
+
+```json
+{
+  "summary": {
+    "processed_rows": 10000,
+    "matched_rows": 9720,
+    "result_rows": 8,
+    "returned_rows": 8,
+    "truncated": false,
+    "warnings": []
+  },
+  "table": {
+    "columns": [
+      {"key": "Machine", "label": "Machine"},
+      {"key": "mean_yield", "label": "mean_yield"}
+    ],
+    "rows": [
+      {"Machine": "A01", "mean_yield": 96.8}
+    ]
+  },
+  "charts": [
+    {
+      "type": "bar",
+      "title": "Average yield by machine",
+      "x_field": "Machine",
+      "y_field": "mean_yield",
+      "data": [
+        {"Machine": "A01", "mean_yield": 96.8}
+      ]
+    }
+  ],
+  "plan": {}
+}
+```
+
+前端直接以 `table` 與 `charts` 渲染，不解析 LLM 文字。`truncated=true` 時必須提示
+畫面只顯示部分結果。
+
+---
+
+## 9. Permission API
+
+### 9.1 設定文件權限
 
 ```http
 POST /api/v1/permissions/documents/{document_id}
@@ -617,7 +832,7 @@ Response:
 
 ---
 
-### 8.2 查詢文件權限
+### 9.2 查詢文件權限
 
 ```http
 GET /api/v1/permissions/documents/{document_id}
@@ -640,9 +855,9 @@ Response:
 
 ---
 
-## 9. Audit API
+## 10. Audit API
 
-### 9.1 查詢問答紀錄
+### 10.1 查詢問答紀錄
 
 ```http
 GET /api/v1/audit/chat-logs
@@ -675,7 +890,7 @@ Response:
 
 ---
 
-### 9.2 查詢遮罩事件
+### 10.2 查詢遮罩事件
 
 ```http
 GET /api/v1/audit/masking-events
@@ -701,7 +916,7 @@ Response:
 
 ---
 
-## 10. Skills API
+## 11. Skills API
 
 ```http
 GET    /api/v1/skills
@@ -726,7 +941,7 @@ Skills cannot be deleted, and `SKILL.md` must be changed through the Skill updat
 
 ---
 
-## 10.1 Embedding Service 管理 API
+## 11.1 Embedding Service 管理 API
 
 ```http
 GET /api/v1/admin/embedding/status
@@ -764,7 +979,7 @@ GET  /redoc
 
 ---
 
-## 11. Error Response 格式
+## 12. Error Response 格式
 
 所有錯誤統一格式：
 

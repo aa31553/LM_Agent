@@ -1,10 +1,14 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
-> 適用分支：`codex/llmwiki-feature`  
-> API 版本：`0.9.0`
-> 更新日期：2026-07-28
+> 適用分支：`codex/session-analysis-workspace`<br>
+> API 版本：`0.10.0`<br>
+> 更新日期：2026-07-30
 
-本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。若要讓 LLM / Agent 解析 API 契約，請改讀 [FastAPI LLM Reference](FastAPI_LLM_Reference.md)。執行中的欄位與 schema 最終仍以 `GET /openapi.json` 為準。
+本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。前端檔案流程與
+TypeScript 範例請直接讀 [前端檔案上傳與分析串接指南](Frontend_File_Upload_Guide.md)；
+若要讓 LLM / Agent 解析 API 契約，請改讀
+[FastAPI LLM Reference](FastAPI_LLM_Reference.md)。執行中的欄位與 schema 最終仍以
+`GET /openapi.json` 為準。
 
 ## 1. 服務入口
 
@@ -29,6 +33,12 @@ uvicorn app.main:app --reload
 
 ```bash
 python -m app.workers.document_tasks
+```
+
+若要使用 Excel／CSV 分析工作區，還必須啟動另一個分析 Worker：
+
+```bash
+python -m app.workers.analysis_tasks
 ```
 
 API 行程只負責上傳、建立處理工作與查詢狀態。PDF 的 `pypdf`、OCR 與可選的
@@ -154,13 +164,59 @@ curl -X POST "http://127.0.0.1:8000/api/v1/documents/upload" \
   -F "confidential_level=internal"
 ```
 
-`scope=session` 時不得傳 `knowledge_base_id`。可傳既有 `session_id`；若省略，伺服器會建立並回傳新的 Session。刪除 Session 會連同該 Session 的訊息、暫存文件、切片與本機 artifact 一起刪除，且不可復原：
+`scope=session` 時不得傳 `knowledge_base_id`。可傳既有 `session_id`；若省略，
+伺服器會建立並回傳新的 Session。多檔上傳時，先上傳第一檔並保存回傳的
+`session_id`，其餘檔案再帶入相同 ID，避免每個檔案各自建立 Session。
+
+附件上傳後必須輪詢 `GET /api/v1/documents/{document_id}/status` 至 `ready`。前端可用：
+
+```http
+GET    /api/v1/chat/sessions/{session_id}/attachments
+DELETE /api/v1/chat/sessions/{session_id}/attachments/{document_id}
+```
+
+問答請求可使用 `attachment_ids` 與 `retrieval_scope` 精確限制來源，例如：
+
+```json
+{
+  "session_id": "<SESSION_UUID>",
+  "query": "比較兩份附件的差異",
+  "knowledge_base_ids": [],
+  "attachment_ids": ["<DOCUMENT_UUID_1>", "<DOCUMENT_UUID_2>"],
+  "retrieval_scope": "attachments_only",
+  "top_k": 8,
+  "use_rerank": true,
+  "use_masking": true,
+  "use_tools": false
+}
+```
+
+刪除 Session 會連同該 Session 的訊息、暫存文件、分析檔、分析 Job、切片與本機
+artifact 一起刪除，且不可復原：
 
 ```http
 DELETE /api/v1/chat/sessions/{session_id}
 ```
 
-### 4.3 一般問答
+### 4.3 Excel／CSV 確定性分析
+
+大型試算表若要提取欄位、篩選、分組、統計並產生前端圖表資料，使用 Analysis API，
+不要把它當成 RAG 文件：
+
+1. `POST /api/v1/analysis/files/upload`
+2. `GET /api/v1/analysis/files/{file_id}/inspect`
+3. `POST /api/v1/analysis/plans/validate`
+4. `POST /api/v1/analysis/jobs`
+5. `GET /api/v1/analysis/jobs/{job_id}` 輪詢至 `completed` 或 `failed`
+6. 直接渲染 `result.table` 與 `result.charts`
+7. 可選擇呼叫 `POST /api/v1/analysis/jobs/{job_id}/explain`
+
+分析檔不會建立 chunk 或 Embedding，也不會進入知識庫。後端只執行白名單
+`AnalysisPlan`，不執行 LLM 產生的 Python 或 SQL；31B LLM 僅負責解釋已完成的結果。
+完整請求、回應與 TypeScript 範例請見
+[前端檔案上傳與分析串接指南](Frontend_File_Upload_Guide.md)。
+
+### 4.4 一般問答
 
 ```http
 POST /api/v1/chat/query
@@ -205,7 +261,7 @@ user 訊息不會重複加入。
 `### 2. Key points` 至 `### 5. Limitations`；這些內容位於 `sections`。若模型
 服務未提供 token 統計，前端不顯示用量。
 
-### 4.4 程式碼問答
+### 4.5 程式碼問答
 
 程式碼助理使用 `POST /api/v1/code-chat/query` 或 SSE 版本
 `POST /api/v1/code-chat/stream`。請求可傳 `code`、`language`、`file_name` 與可選
@@ -233,7 +289,7 @@ confidential_level=internal
 Code Session 不可拿去呼叫一般 `/chat/*`，反之亦然；刪除該 Session 時會一併刪除
 暫存檔與聊天紀錄。貼上或上傳的程式碼只會送給 LLM 分析，不會由 LM Agent 執行。
 
-### 4.5 LLMWiki
+### 4.6 LLMWiki
 
 所有正式 LLMWiki 查詢都必須以重複 query parameter 傳入至少一個 `knowledge_base_ids`：
 
@@ -249,7 +305,7 @@ GET /api/v1/llmwiki/operations?limit=20
 
 `GET /api/v1/llmwiki/demo` 不需登入，只回傳內建展示資料。
 
-### 4.6 管理員檢查
+### 4.7 管理員檢查
 
 ```http
 GET  /api/v1/admin/status
@@ -267,8 +323,9 @@ LLM 測試不啟動 RAG、LLMWiki 或資料庫 Session，適合單獨確認 Open
 | 群組 | 主要用途 | 一般權限 |
 | --- | --- | --- |
 | Health | 系統與相依服務健康狀態 | 公開 |
-| Chat | 問答、SSE、Session 訊息與刪除 | 已驗證使用者 |
-| Documents | 格式、上傳、列表、狀態、明細 | 已驗證；reindex/archive 僅 admin |
+| Chat | 問答、SSE、Session 訊息、附件管理與刪除 | 已驗證使用者 |
+| Documents | 格式、上傳、列表、狀態、明細與 CRUD | 已驗證；異動依文件 write/manage 權限 |
+| Analysis | XLSX／CSV 上傳、inspect、計畫、Job、結果與解說 | Session 擁有者或 admin |
 | Knowledge Bases | 建立與列出可存取知識庫 | 已驗證使用者 |
 | Skills | Skill 列表、明細與檔案預覽 | 已驗證；異動僅 admin |
 | LLMWiki | 搜尋、編譯、索引、圖、lint、operations | demo 公開，其餘已驗證 |
@@ -291,7 +348,11 @@ LLM 測試不啟動 RAG、LLMWiki 或資料庫 Session，適合單獨確認 Open
 
 主要錯誤碼：
 
-`INVALID_REQUEST`、`UNAUTHORIZED`、`PERMISSION_DENIED`、`DOCUMENT_NOT_FOUND`、`DOCUMENT_NOT_READY`、`SKILL_NOT_FOUND`、`DLP_BLOCKED`、`EMBEDDING_SERVICE_ERROR`、`LLM_SERVICE_ERROR`、`INTERNAL_ERROR`。
+`INVALID_REQUEST`、`UNAUTHORIZED`、`PERMISSION_DENIED`、`DOCUMENT_NOT_FOUND`、
+`DOCUMENT_NOT_READY`、`ATTACHMENT_NOT_READY`、`ANALYSIS_NOT_FOUND`、
+`ANALYSIS_FAILED`、`SKILL_NOT_FOUND`、`DLP_BLOCKED`、`EMBEDDING_SERVICE_ERROR`、
+`LLM_SERVICE_ERROR`、`CHAT_BUSY`、`CHAT_TIMEOUT`、`PROMPT_TOO_LARGE`、
+`INTERNAL_ERROR`。
 
 FastAPI 自身的 request validation error 仍可能依框架預設格式回傳；應以實際 `/openapi.json` 與 API 回應為準。
 
@@ -303,6 +364,7 @@ FastAPI 自身的 request validation error 仍可能依框架預設格式回傳�
 2. 本 Human 指南的流程與權限說明。
 3. `FastAPI_LLM_Reference.md` 的端點清單與契約。
 4. 舊版詳細規格 `Fastapi_spec.md` 中仍保留的範例。
+5. `Frontend_File_Upload_Guide.md` 的前端流程與程式範例。
 
 程式碼的主要來源：
 

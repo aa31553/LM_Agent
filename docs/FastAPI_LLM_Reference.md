@@ -3,12 +3,13 @@ document_id: lm-agent-fastapi-llm-reference
 document_type: api_contract_companion
 language: zh-TW
 api_name: LM Agent API
-api_version: 0.9.0
+api_version: 0.10.0
 base_path: /api/v1
-branch: codex/llmwiki-feature
-updated_at: 2026-07-28
+branch: codex/session-analysis-workspace
+updated_at: 2026-07-30
 canonical_runtime_schema: GET /openapi.json
 human_guide: docs/FastAPI_Human_Guide.md
+frontend_upload_guide: docs/Frontend_File_Upload_Guide.md
 legacy_detail: docs/Fastapi_spec.md
 ---
 
@@ -32,7 +33,7 @@ legacy_detail: docs/Fastapi_spec.md
 ```yaml
 service:
   title: LM Agent API
-  version: 0.9.0
+  version: 0.10.0
   base_path: /api/v1
   docs:
     swagger: /docs
@@ -84,6 +85,17 @@ DocumentStatus:
 DocumentScope:
   - knowledge_base
   - session
+RetrievalScope:
+  - auto
+  - attachments_only
+  - session_attachments
+  - knowledge_bases_only
+  - session_and_knowledge_bases
+AnalysisJobStatus:
+  - queued
+  - running
+  - completed
+  - failed
 PermissionSubjectType:
   - user
   - role
@@ -103,10 +115,16 @@ ErrorCode:
   - PERMISSION_DENIED
   - DOCUMENT_NOT_FOUND
   - DOCUMENT_NOT_READY
+  - ATTACHMENT_NOT_READY
+  - ANALYSIS_NOT_FOUND
+  - ANALYSIS_FAILED
   - SKILL_NOT_FOUND
   - DLP_BLOCKED
   - EMBEDDING_SERVICE_ERROR
   - LLM_SERVICE_ERROR
+  - CHAT_BUSY
+  - CHAT_TIMEOUT
+  - PROMPT_TOO_LARGE
   - INTERNAL_ERROR
 ```
 
@@ -177,12 +195,16 @@ allow_list_match:
 | POST | `/code-chat/query` | auth + permission-filtered | `CodeChatRequest` | `CodeChatResponse` |
 | POST | `/code-chat/stream` | auth + permission-filtered | `CodeChatRequest` | SSE stream (`CodeChatResponse` in `done`) |
 | GET | `/chat/sessions/{session_id}/messages` | owner-or-admin | path UUID | `ChatSessionMessages` |
+| GET | `/chat/sessions/{session_id}/attachments` | owner-or-admin | path UUID | `SessionAttachmentListResponse` |
+| DELETE | `/chat/sessions/{session_id}/attachments/{document_id}` | owner-or-admin | path UUIDs | `SessionAttachmentDeleteResponse` |
 | DELETE | `/chat/sessions/{session_id}` | owner-or-admin | path UUID | `ChatSessionDeleteResponse` |
 
 ```yaml
 ChatQueryRequest:
   session_id: UUID|null = null
-  knowledge_base_ids: list[UUID] = []
+  knowledge_base_ids: list[UUID](max_length=20) = []
+  attachment_ids: list[UUID](max_length=20) = []
+  retrieval_scope: RetrievalScope = auto
   query: string(min_length=1)
   top_k: integer(min=1,max=50,default=8)
   use_rerank: boolean = true
@@ -209,6 +231,34 @@ ChatQueryResponse:
   risk_level: RiskLevel
   masked_entities: list[MaskedEntity]
   tool_calls: list[ToolCallTrace]
+
+SessionAttachmentItem:
+  document_id: UUID
+  filename: string
+  file_type: string
+  status: string
+  source_type: string
+  page_count: integer|null
+  chunk_count: integer
+  created_at: datetime
+
+SessionAttachmentListResponse:
+  session_id: UUID
+  items: list[SessionAttachmentItem]
+
+SessionAttachmentDeleteResponse:
+  session_id: UUID
+  document_id: UUID
+  deleted_files: integer
+  status: deleted
+
+ChatSessionDeleteResponse:
+  session_id: UUID
+  deleted_documents: integer
+  deleted_analysis_files: integer
+  deleted_messages: integer
+  deleted_files: integer
+  status: deleted
 ```
 
 `sections` is parsed from the provider's `### 2` through `### 5` output so the
@@ -217,21 +267,33 @@ OpenAI-compatible provider response. Token fields are `null` when the provider
 does not return usage. When tool calling requires multiple completions, usage
 is the sum of all completions in the request.
 
-RAG mode selection:
+Retrieval scope validation:
 
 ```yaml
-if knowledge_base_ids is non_empty:
-  mode: knowledge_base_plus_same_session_rag
-else_if session_has_any_document_record:
-  mode: session_rag
-else:
-  mode: general_llm
-  citations: []
-  images: []
-  prohibition: do not invent documents, citations, page numbers, or source URLs
+attachment_ids:
+  requires: session_id
+attachments_only:
+  requires:
+    - session_id
+    - non_empty attachment_ids
+session_attachments:
+  requires: session_id
+knowledge_bases_only:
+  requires: non_empty knowledge_base_ids
+session_and_knowledge_bases:
+  requires: session_id
+attachment_constraints:
+  - every attachment belongs to session_id
+  - every attachment is ready
+  - caller owns the session or is admin
+auto:
+  with_attachment_ids: selected attachments only
+  otherwise: legacy same-session and/or knowledge-base behavior
 ```
 
-If a document source exists but retrieval finds no relevant chunk, do not fall back to general knowledge.
+If no source is selected and the Session has no document, Chat may use general LLM mode with
+empty citations and images. If a document source exists but retrieval finds no relevant chunk,
+do not fall back to general knowledge.
 
 ### 4.3 Documents
 
@@ -242,8 +304,10 @@ If a document source exists but retrieval finds no relevant chunk, do not fall b
 | GET | `/documents` | auth + permission-filtered | query filters | `PageResponse[DocumentListItem]` |
 | GET | `/documents/{document_id}/status` | auth + permission-filtered | path UUID | `DocumentStatusResponse` |
 | GET | `/documents/{document_id}` | auth + permission-filtered | path UUID | `DocumentDetail` |
-| POST | `/documents/{document_id}/reindex` | admin | path UUID | `ReindexResponse` |
-| POST | `/documents/{document_id}/archive` | admin | path UUID | `DocumentArchiveResponse` |
+| PATCH | `/documents/{document_id}` | auth + write permission | `DocumentUpdate` | `DocumentDetail` |
+| POST | `/documents/{document_id}/reindex` | auth + write permission | path UUID | `ReindexResponse` |
+| POST | `/documents/{document_id}/archive` | auth + write permission | path UUID | `DocumentArchiveResponse` |
+| DELETE | `/documents/{document_id}` | auth + manage permission | path UUID | 204 |
 
 Upload multipart contract:
 
@@ -276,12 +340,154 @@ page: integer(min=1,default=1)
 page_size: integer(min=1,max=100,default=20)
 ```
 
-### 4.4 Knowledge Bases
+### 4.4 Analysis
+
+All analysis resources are Session-scoped. Access is limited to the Session owner or admin.
+Analysis files are not documents, do not create chunks or embeddings, and are not searchable
+through Chat retrieval.
+
+| Method | Path | Auth | Request | Response |
+| --- | --- | --- | --- | --- |
+| POST | `/analysis/files/upload` | owner-or-admin | multipart fields | `AnalysisFileUploadResponse` |
+| GET | `/analysis/files` | owner-or-admin | `session_id` query UUID | `AnalysisFileListResponse` |
+| GET | `/analysis/files/{file_id}/inspect` | owner-or-admin | path UUID | `SpreadsheetInspectionResponse` |
+| DELETE | `/analysis/files/{file_id}` | owner-or-admin | path UUID | 204 |
+| POST | `/analysis/plans/validate` | owner-or-admin | `AnalysisPlanValidateRequest` | `AnalysisPlanValidationResponse` |
+| POST | `/analysis/jobs` | owner-or-admin | `AnalysisJobCreate` | `AnalysisJobResponse`, HTTP 202 |
+| GET | `/analysis/jobs/{job_id}` | owner-or-admin | path UUID | `AnalysisJobResponse` |
+| POST | `/analysis/jobs/{job_id}/explain` | owner-or-admin | path UUID | `AnalysisExplanationResponse` |
+
+```yaml
+AnalysisFileUploadMultipart:
+  file: binary(required; xlsx|csv)
+  session_id: UUID(required)
+  confidential_level: ConfidentialLevel = internal
+
+AnalysisFileUploadResponse:
+  file_id: UUID
+  session_id: UUID
+  filename: string
+  file_type: xlsx|csv
+  size_bytes: integer
+  status: ready
+  expires_at: datetime|null
+
+SpreadsheetInspectionResponse:
+  file_id: UUID
+  filename: string
+  file_type: string
+  sheets:
+    - name: string
+      row_count: integer|null
+      column_count: integer
+      columns:
+        - name: string
+          inferred_type: string
+          sample_values: list[scalar]
+          null_count_in_sample: integer
+      sample_rows: list[object]
+
+FilterCondition:
+  column: string
+  operator: eq|ne|gt|gte|lt|lte|contains|in|is_null|not_null
+  value: scalar|list[scalar]|null
+
+AggregationSpec:
+  function: count|sum|mean|std|min|max|count_if
+  column: string|null
+  alias: string(min=1,max=128)
+  condition: FilterCondition|null
+  constraints:
+    - column is required for sum, mean, std, min, max
+    - condition is required for count_if
+
+AnalysisPlan:
+  sheet: string|null
+  select: list[string](max_length=50) = []
+  group_by: list[string](max_length=5) = []
+  filters: list[FilterCondition](max_length=20) = []
+  aggregations: list[AggregationSpec](max_length=20) = []
+  sort:
+    - column: string
+      direction: asc|desc
+    max_length: 5
+  limit: integer(min=1,max=5000,default=1000)
+  charts:
+    - type: bar|line|scatter
+      x_field: string
+      y_field: string
+      title: string(max=255,default="Analysis result")
+    max_length: 5
+  constraints:
+    - select or aggregations is required
+    - raw-row sort without aggregations is rejected
+    - output fields used by sort and charts must exist
+    - aggregation aliases must be unique and must not collide with group_by names;
+      clients must enforce this because backend 0.10.0 does not fully reject collisions
+
+AnalysisPlanValidateRequest:
+  file_id: UUID
+  plan: AnalysisPlan
+
+AnalysisPlanValidationResponse:
+  valid: true
+  normalized_plan: AnalysisPlan
+  warnings: list[string]
+
+AnalysisJobCreate:
+  file_id: UUID
+  plan: AnalysisPlan
+
+AnalysisJobResponse:
+  job_id: UUID
+  session_id: UUID
+  file_id: UUID
+  status: queued|running|completed|failed
+  plan: AnalysisPlan
+  result: object|null
+  error_message: string|null
+  created_at: datetime
+  updated_at: datetime
+  finished_at: datetime|null
+
+AnalysisResult:
+  summary:
+    processed_rows: integer
+    matched_rows: integer
+    result_rows: integer
+    returned_rows: integer
+    truncated: boolean
+    warnings: list[string]
+  table:
+    columns: list[{key: string, label: string}]
+    rows: list[object]
+  charts:
+    - type: bar|line|scatter
+      title: string
+      x_field: string
+      y_field: string
+      data: list[object]
+  plan: AnalysisPlan
+
+AnalysisExplanationResponse:
+  job_id: UUID
+  answer: string
+  usage: LLMUsage
+```
+
+Defaults: upload 500 MB, scan 5,000,000 rows, 5,000 groups, return 5,000 rows,
+20 inspect samples, 1,800-second job timeout, 168-hour retention. The dedicated
+worker command is `python -m app.workers.analysis_tasks`.
+
+### 4.5 Knowledge Bases
 
 | Method | Path | Auth | Request | Response |
 | --- | --- | --- | --- | --- |
 | POST | `/knowledge-bases` | auth | `KnowledgeBaseCreate` | `KnowledgeBaseResponse` |
 | GET | `/knowledge-bases` | auth + permission-filtered | none | `{"items": list[KnowledgeBaseResponse]}` |
+| GET | `/knowledge-bases/{knowledge_base_id}` | auth + permission-filtered | path UUID | `KnowledgeBaseResponse` |
+| PATCH | `/knowledge-bases/{knowledge_base_id}` | auth + admin permission | `KnowledgeBaseUpdate` | `KnowledgeBaseResponse` |
+| DELETE | `/knowledge-bases/{knowledge_base_id}` | auth + admin permission | path UUID | 204 |
 
 ```yaml
 KnowledgeBaseCreate:
@@ -291,7 +497,7 @@ KnowledgeBaseCreate:
   default_confidential_level: ConfidentialLevel = internal
 ```
 
-### 4.5 Skills
+### 4.6 Skills
 
 | Method | Path | Auth |
 | --- | --- | --- |
@@ -306,7 +512,7 @@ KnowledgeBaseCreate:
 
 No Skill rules means open to authenticated users; one or more rules means allow-list. System Skills cannot be deleted. `SKILL.md` changes must use the Skill update endpoint.
 
-### 4.6 LLMWiki
+### 4.7 LLMWiki
 
 All `knowledge_base_ids` parameters below are repeated query parameters of type `list[UUID]`, min length 1, and results are permission-filtered.
 
@@ -323,7 +529,7 @@ All `knowledge_base_ids` parameters below are repeated query parameters of type 
 
 Primary response models: `LLMWikiSearchResponse`, `LLMWikiTopicPage`, `LLMWikiCompileResponse`, `LLMWikiIndexResponse`, `LLMWikiGraph`, `LLMWikiLintResponse`, `LLMWikiOperationLogResponse`.
 
-### 4.7 Permissions
+### 4.8 Permissions
 
 All endpoints are admin-only.
 
@@ -347,7 +553,7 @@ subject_value: string
 permission: read|write|admin
 ```
 
-### 4.8 Audit
+### 4.9 Audit
 
 All endpoints are admin-only and return `{"items": [...]}`.
 
@@ -359,7 +565,7 @@ All endpoints are admin-only and return `{"items": [...]}`.
 | GET | `/audit/llm-logs` | `message_id?`, `status?`, `limit=100 (1..500)` |
 | GET | `/audit/permission-denied` | `user_id?`, `limit=100 (1..500)` |
 
-### 4.9 Admin
+### 4.10 Admin
 
 All endpoints are admin-only.
 
@@ -435,14 +641,20 @@ must:
   - read /openapi.json when live service is reachable
   - include Authorization for every non-public endpoint
   - use multipart/form-data for document and Skill file uploads
+  - use multipart/form-data for analysis file uploads
   - serialize UUID values as strings
   - repeat knowledge_base_ids query keys for list[UUID] LLMWiki inputs
   - poll document status until ready or failed before RAG use
+  - validate AnalysisPlan before creating an analysis job
+  - poll analysis job status until completed or failed before reading result
   - preserve X-Request-ID across a logical operation when tracing is needed
 must_not:
   - invent request fields
   - send knowledge_base_id together with scope=session
   - send session_id together with scope=knowledge_base
+  - send unready attachment IDs to Chat
+  - treat analysis uploads as RAG documents
+  - execute model-generated Python or SQL for spreadsheet analysis
   - claim cross-department access is always denied
   - expose or infer documents removed by permission filtering
   - fabricate citations in general LLM mode

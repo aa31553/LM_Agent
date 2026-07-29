@@ -1,5 +1,11 @@
 # Session Attachments and Spreadsheet Analysis Workspace
 
+> Branch: `codex/session-analysis-workspace`<br>
+> API version: `0.10.0`<br>
+> Updated: 2026-07-30<br>
+> Frontend implementation guide:
+> [Frontend_File_Upload_Guide.md](Frontend_File_Upload_Guide.md)
+
 This feature separates temporary chat documents from deterministic spreadsheet
 analysis. It is designed for an internal 31B non-reasoning LLM: the backend owns
 workflow control and calculations, while the model only answers grounded document
@@ -48,6 +54,11 @@ and is readable by the current principal. Session attachment management routes a
 - `GET /api/v1/chat/sessions/{session_id}/attachments`
 - `DELETE /api/v1/chat/sessions/{session_id}/attachments/{document_id}`
 
+`knowledge_base_ids` and `attachment_ids` each accept at most 20 UUIDs. A frontend
+uploading multiple files into a new Session must upload the first file, save the
+returned `session_id`, and use it for subsequent uploads. Parallel uploads without
+a `session_id` create separate Sessions.
+
 ## Spreadsheet analysis workflow
 
 1. Upload an XLSX or CSV file.
@@ -86,6 +97,10 @@ and is readable by the current principal. Session attachment management routes a
 The backend never executes model-generated Python or SQL. Unknown columns,
 incompatible numeric operations, unsupported output fields, oversized row counts,
 and excessive group counts are rejected before or during execution.
+
+Every aggregation alias must be unique and must not collide with a `group_by`
+column name. API 0.10.0 does not yet reject every alias collision, so clients must
+enforce this constraint before calling the validation or job endpoints.
 
 ### Example plan
 
