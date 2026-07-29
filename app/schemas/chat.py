@@ -1,19 +1,44 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from app.core.constants import ChatType, RiskLevel
+from app.core.constants import ChatType, RetrievalScope, RiskLevel
 
 
 class ChatQueryRequest(BaseModel):
     session_id: UUID | None = None
-    knowledge_base_ids: list[UUID] = Field(default_factory=list)
+    knowledge_base_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    retrieval_scope: RetrievalScope = RetrievalScope.AUTO
     query: str = Field(min_length=1)
     top_k: int = Field(default=8, ge=1, le=50)
     use_rerank: bool = True
     use_masking: bool = True
     use_tools: bool = False
+
+    @model_validator(mode="after")
+    def validate_retrieval_scope(self):
+        session_scopes = {
+            RetrievalScope.ATTACHMENTS_ONLY,
+            RetrievalScope.SESSION_ATTACHMENTS,
+            RetrievalScope.SESSION_AND_KNOWLEDGE_BASES,
+        }
+        if self.attachment_ids and self.session_id is None:
+            raise ValueError("session_id is required when attachment_ids are supplied")
+        if self.retrieval_scope in session_scopes and self.session_id is None:
+            raise ValueError("session_id is required for the selected retrieval_scope")
+        if (
+            self.retrieval_scope == RetrievalScope.ATTACHMENTS_ONLY
+            and not self.attachment_ids
+        ):
+            raise ValueError("attachment_ids is required for attachments_only")
+        if (
+            self.retrieval_scope == RetrievalScope.KNOWLEDGE_BASES_ONLY
+            and not self.knowledge_base_ids
+        ):
+            raise ValueError("knowledge_base_ids is required for knowledge_bases_only")
+        return self
 
 
 class CodeChatRequest(ChatQueryRequest):
@@ -24,7 +49,11 @@ class CodeChatRequest(ChatQueryRequest):
     line_end: int | None = Field(default=None, ge=1)
 
     def model_post_init(self, __context) -> None:
-        if self.line_start is not None and self.line_end is not None and self.line_end < self.line_start:
+        if (
+            self.line_start is not None
+            and self.line_end is not None
+            and self.line_end < self.line_start
+        ):
             raise ValueError("line_end must be greater than or equal to line_start")
 
 
@@ -123,9 +152,33 @@ class ChatSessionMessages(BaseModel):
     messages: list[ChatMessage]
 
 
+class SessionAttachmentItem(BaseModel):
+    document_id: UUID
+    filename: str
+    file_type: str
+    status: str
+    source_type: str
+    page_count: int | None = None
+    chunk_count: int = 0
+    created_at: datetime
+
+
+class SessionAttachmentListResponse(BaseModel):
+    session_id: UUID
+    items: list[SessionAttachmentItem]
+
+
+class SessionAttachmentDeleteResponse(BaseModel):
+    session_id: UUID
+    document_id: UUID
+    deleted_files: int
+    status: str = "deleted"
+
+
 class ChatSessionDeleteResponse(BaseModel):
     session_id: UUID
     deleted_documents: int
+    deleted_analysis_files: int = 0
     deleted_messages: int
     deleted_files: int
     status: str = "deleted"
