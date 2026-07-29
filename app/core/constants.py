@@ -61,6 +61,21 @@ class ChatType(TextEnum):
     CODE = "code"
 
 
+class RetrievalScope(TextEnum):
+    AUTO = "auto"
+    ATTACHMENTS_ONLY = "attachments_only"
+    SESSION_ATTACHMENTS = "session_attachments"
+    KNOWLEDGE_BASES_ONLY = "knowledge_bases_only"
+    SESSION_AND_KNOWLEDGE_BASES = "session_and_knowledge_bases"
+
+
+class AnalysisJobStatus(TextEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class DLPAction(TextEnum):
     ALLOW = "allow"
     MASK = "mask"
@@ -81,6 +96,9 @@ class ErrorCode(TextEnum):
     PERMISSION_DENIED = "PERMISSION_DENIED"
     DOCUMENT_NOT_FOUND = "DOCUMENT_NOT_FOUND"
     DOCUMENT_NOT_READY = "DOCUMENT_NOT_READY"
+    ATTACHMENT_NOT_READY = "ATTACHMENT_NOT_READY"
+    ANALYSIS_NOT_FOUND = "ANALYSIS_NOT_FOUND"
+    ANALYSIS_FAILED = "ANALYSIS_FAILED"
     SKILL_NOT_FOUND = "SKILL_NOT_FOUND"
     DLP_BLOCKED = "DLP_BLOCKED"
     EMBEDDING_SERVICE_ERROR = "EMBEDDING_SERVICE_ERROR"
