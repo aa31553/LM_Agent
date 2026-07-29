@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.9.0"
+    app_version: str = "0.10.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     pdf_image_max_count: int = Field(default=50, ge=0)
     pdf_image_ocr_enabled: bool = False
     pdf_image_ocr_max_count: int = Field(default=10, ge=0)
+
+    analysis_upload_max_bytes: int = Field(default=500_000_000, ge=1)
+    analysis_max_rows: int = Field(default=5_000_000, ge=1)
+    analysis_max_groups: int = Field(default=5000, ge=1)
+    analysis_result_max_rows: int = Field(default=5000, ge=1)
+    analysis_sample_rows: int = Field(default=20, ge=1, le=500)
+    analysis_explanation_max_chars: int = Field(default=12000, ge=1000)
+    analysis_retention_hours: int = Field(default=168, ge=1, le=8760)
+    analysis_job_timeout_seconds: int = Field(default=1800, ge=1)
 
 
 @lru_cache
