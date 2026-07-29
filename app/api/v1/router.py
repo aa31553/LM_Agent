@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin,
+    analysis,
     audit,
     chat,
     code_chat,
@@ -18,6 +19,7 @@ api_router.include_router(health.router, prefix="/health", tags=["health"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(code_chat.router, prefix="/code-chat", tags=["code-chat"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
+api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(
     knowledge_bases.router,
