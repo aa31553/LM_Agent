@@ -5,9 +5,11 @@ from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.constants import RetrievalScope
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
+from app.rag.scoped_retriever import ScopedHybridRetriever
 from app.schemas.chat import CodeChatRequest, CodeChatResponse
 from app.services.chat_runtime_service import chat_runtime_service
 from app.services.code_chat_service import CodeChatService
@@ -23,7 +25,7 @@ async def query(
     db: Session = Depends(get_db),
 ) -> CodeChatResponse:
     async with chat_runtime_service.request_slot():
-        return await CodeChatService(db=db).answer(
+        return await _code_chat_service(db, payload, principal).answer(
             payload,
             request_id=request_id,
             principal=principal,
@@ -40,7 +42,11 @@ async def stream_query(
     async def event_generator():
         try:
             async with chat_runtime_service.request_slot():
-                async for event in CodeChatService(db=db).stream_answer(
+                async for event in _code_chat_service(
+                    db,
+                    payload,
+                    principal,
+                ).stream_answer(
                     payload,
                     request_id=request_id,
                     principal=principal,
@@ -70,6 +76,26 @@ async def stream_query(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _code_chat_service(
+    db: Session,
+    payload: CodeChatRequest,
+    principal: Principal,
+) -> CodeChatService:
+    service = CodeChatService(db=db)
+    if payload.attachment_ids or payload.retrieval_scope != RetrievalScope.AUTO:
+        retriever = ScopedHybridRetriever(
+            db=db,
+            attachment_ids=payload.attachment_ids,
+            retrieval_scope=payload.retrieval_scope,
+        )
+        retriever.validate_request(
+            session_id=payload.session_id,
+            principal=principal,
+        )
+        service.rag_service.retriever = retriever
+    return service
 
 
 def _sse_event(event: dict) -> str:
