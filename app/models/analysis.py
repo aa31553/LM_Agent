@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -84,6 +84,11 @@ class AnalysisPlanDraft(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     source_file_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     plan_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_llm_json: Mapped[dict | None] = mapped_column(JSON)
+    normalized_intent_json: Mapped[dict | None] = mapped_column(JSON)
+    normalization_actions_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    validation_errors_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    repair_attempted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     warnings_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
     error_message: Mapped[str | None] = mapped_column(Text)
