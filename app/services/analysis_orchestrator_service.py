@@ -1,5 +1,6 @@
 import json
 import re
+from copy import deepcopy
 from datetime import datetime
 from uuid import UUID
 
@@ -22,6 +23,8 @@ from app.schemas.analysis import (
     AnalysisPlanDraftResponse,
 )
 from app.services.analysis_job_service import AnalysisJobService
+from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
+from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
 from app.services.audit_service import AuditService
 from app.services.dataset_query_service import DatasetQueryService
 from app.services.llm_service import LLMService
@@ -35,6 +38,8 @@ class AnalysisOrchestratorService:
         self.db = db
         self.llm_service = llm_service or LLMService()
         self.jobs = AnalysisJobService(db)
+        self.normalizer = AnalysisPlanNormalizer()
+        self.repair_service = AnalysisPlanRepairService(self.llm_service)
 
     async def create_draft(
         self,
@@ -112,26 +117,25 @@ class AnalysisOrchestratorService:
             user_prompt=user_prompt,
         )
         plan_payload = self._extract_json(raw)
-        if "plan" in plan_payload and isinstance(plan_payload["plan"], dict):
-            plan_payload = plan_payload["plan"]
-        if not plan_payload.get("sources") and len(sources) == 1:
+        raw_plan_payload = deepcopy(plan_payload)
+        default_source = None
+        if len(sources) == 1:
             dataset = sources[0].dataset_manifest["datasets"][0]
-            plan_payload["sources"] = [
-                {
-                    "file_id": str(sources[0].id),
-                    "alias": "data",
-                    "sheet": dataset.get("sheet"),
-                }
-            ]
-        try:
-            plan = AnalysisPlan.model_validate(plan_payload)
-        except Exception as exc:
-            raise APIError(
-                ErrorCode.INVALID_REQUEST,
-                "The LLM returned an invalid AnalysisPlan draft.",
-                422,
-                details={"validation_error": str(exc)},
-            ) from exc
+            default_source = {
+                "file_id": str(sources[0].id),
+                "alias": "data",
+                "sheet": dataset.get("sheet"),
+            }
+        (
+            plan,
+            normalization_actions,
+            repair_attempted,
+            validation_errors,
+        ) = await self._normalize_and_validate_plan(
+            plan_payload,
+            schema_context=schema_context,
+            default_source=default_source,
+        )
         allowed_file_ids = {str(source.id) for source in sources}
         referenced_file_ids = {str(source.file_id) for source in plan.sources}
         if not referenced_file_ids.issubset(allowed_file_ids):
@@ -150,6 +154,11 @@ class AnalysisOrchestratorService:
             question=payload.question,
             source_file_ids=[str(item) for item in payload.file_ids],
             plan_json=normalized.model_dump(mode="json"),
+            raw_llm_json=raw_plan_payload,
+            normalized_intent_json=normalized.model_dump(mode="json"),
+            normalization_actions_json=normalization_actions,
+            validation_errors_json=validation_errors,
+            repair_attempted=repair_attempted,
             warnings_json=warnings,
             status=AnalysisPlanDraftStatus.VALIDATED.value,
         )
@@ -213,6 +222,7 @@ class AnalysisOrchestratorService:
             draft_id=draft.id,
         )
         draft.plan_json = normalized.model_dump(mode="json")
+        draft.normalized_intent_json = normalized.model_dump(mode="json")
         draft.warnings_json = warnings
         draft.status = AnalysisPlanDraftStatus.CONFIRMED.value
         draft.confirmed_at = datetime.utcnow()
@@ -246,11 +256,78 @@ class AnalysisOrchestratorService:
             file_ids=[UUID(str(item)) for item in draft.source_file_ids],
             plan=AnalysisPlan.model_validate(draft.plan_json),
             warnings=list(draft.warnings_json or []),
+            normalization_actions=list(draft.normalization_actions_json or []),
+            validation_errors=list(draft.validation_errors_json or []),
+            repair_attempted=bool(draft.repair_attempted),
             status=AnalysisPlanDraftStatus(draft.status),
             confirmation_required=draft.status != AnalysisPlanDraftStatus.CONFIRMED.value,
             created_at=draft.created_at,
             confirmed_at=draft.confirmed_at,
         )
+
+    async def _normalize_and_validate_plan(
+        self,
+        plan_payload: dict,
+        *,
+        schema_context: str,
+        default_source: dict | None,
+    ) -> tuple[AnalysisPlan, list[dict], bool, list[str]]:
+        candidate = self._with_default_source(plan_payload, default_source)
+        try:
+            normalized = self.normalizer.normalize(candidate)
+            plan = AnalysisPlan.model_validate(normalized.payload)
+            return plan, normalized.actions, False, []
+        except APIError:
+            raise
+        except Exception as first_error:
+            validation_errors = [self._error_message(first_error)]
+
+        repaired_raw = await self.repair_service.repair(
+            candidate,
+            validation_error=validation_errors[0],
+            schema_context=schema_context,
+        )
+        try:
+            repaired_payload = self._extract_json(repaired_raw)
+            repaired_payload = self._with_default_source(repaired_payload, default_source)
+            repaired = self.normalizer.normalize(repaired_payload)
+            plan = AnalysisPlan.model_validate(repaired.payload)
+        except Exception as repair_error:
+            raise APIError(
+                ErrorCode.ANALYSIS_REPAIR_FAILED,
+                "The LLM analysis plan remained invalid after one repair attempt.",
+                422,
+                details={
+                    "initial_validation_error": validation_errors[0],
+                    "repair_validation_error": self._error_message(repair_error),
+                },
+            ) from repair_error
+
+        actions = [
+            *repaired.actions,
+            {
+                "code": "LLM_PLAN_REPAIRED",
+                "path": None,
+                "source_field": None,
+                "target_field": None,
+            },
+        ]
+        return plan, actions, True, validation_errors
+
+    @staticmethod
+    def _with_default_source(plan_payload: dict, default_source: dict | None) -> dict:
+        candidate = deepcopy(plan_payload)
+        if "plan" in candidate and isinstance(candidate["plan"], dict):
+            candidate = deepcopy(candidate["plan"])
+        if not candidate.get("sources") and default_source is not None:
+            candidate["sources"] = [deepcopy(default_source)]
+        return candidate
+
+    @staticmethod
+    def _error_message(error: Exception) -> str:
+        if isinstance(error, APIError):
+            return error.message
+        return str(error)
 
     def _schema_context(self, sources) -> str:
         payload = []
