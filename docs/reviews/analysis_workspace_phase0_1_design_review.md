@@ -8,7 +8,8 @@
 
 ## Decision
 
-The design is approved for Phase 0-1 once the Windows GitHub Actions gate passes.
+The design is approved for Phase 0-1. Per project direction, Windows runner execution is
+supplementary and is not a blocking completion gate.
 The canonical `AnalysisPlan` and `ChartSpec` remain unchanged; compatibility is
 implemented before Pydantic validation and only for unambiguous legacy fields.
 
