@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   phase0-1:
@@ -49,3 +50,31 @@ jobs:
           python -m pytest -q `
             tests/test_analysis_plan_normalizer.py `
             tests/test_session_analysis_workspace.py
+
+      - name: Publish observable commit status
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_RESULT: ${{ job.status }}
+          TARGET_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          $state = if ($env:CI_RESULT -eq "success") { "success" } else { "failure" }
+          $description = "Windows Phase 0-1: $($env:CI_RESULT)"
+          $body = @{
+            state = $state
+            context = "windows/phase0-1"
+            description = $description
+          } | ConvertTo-Json
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          Invoke-RestMethod `
+            -Method Post `
+            -Uri "https://api.github.com/repos/$env:REPOSITORY/statuses/$env:TARGET_SHA" `
+            -Headers $headers `
+            -ContentType "application/json" `
+            -Body $body
