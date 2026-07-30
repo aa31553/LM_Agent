@@ -37,6 +37,7 @@ from app.services.chunking_service import ChunkingService, TextChunk
 from app.services.embedding_service import EmbeddingService
 from app.services.image_ocr_service import ImageOCRService, OCRUnavailableError
 from app.services.markdown_conversion_service import MarkdownConversionService
+from app.services.office_file_preparation_service import OfficeFilePreparationService
 from app.services.office_parser_service import OfficeParserService
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
 from app.services.pdf_parser_service import PDFParserService
@@ -75,6 +76,7 @@ class DocumentIngestionService:
         office_parser: OfficeParserService | None = None,
         markdown_converter: MarkdownConversionService | None = None,
         text_parser: TextDocumentParserService | None = None,
+        office_preparation: OfficeFilePreparationService | None = None,
     ) -> None:
         self.db = db
         self.storage = storage or LocalStorage()
@@ -83,8 +85,11 @@ class DocumentIngestionService:
         self.chunking_service = chunking_service or ChunkingService()
         self.embedding_service = embedding_service or EmbeddingService()
         self.image_extraction_service = image_extraction_service or PDFImageExtractionService()
-        self.office_parser = office_parser or OfficeParserService()
-        self.markdown_converter = markdown_converter or MarkdownConversionService()
+        self.office_preparation = office_preparation or OfficeFilePreparationService()
+        self.office_parser = office_parser or OfficeParserService(self.office_preparation)
+        self.markdown_converter = markdown_converter or MarkdownConversionService(
+            office_preparation=self.office_preparation
+        )
         self.text_parser = text_parser or TextDocumentParserService()
 
     async def queue_upload(
@@ -136,7 +141,11 @@ class DocumentIngestionService:
         job = ProcessingQueueService(self.db).enqueue(document.id, "document")
         logger.info(
             "document_upload_queued",
-            extra={"document_id": str(document.id), "job_id": str(job.id), "request_id": request_id},
+            extra={
+                "document_id": str(document.id),
+                "job_id": str(job.id),
+                "request_id": request_id,
+            },
         )
         return DocumentUploadResponse(
             request_id=request_id,
@@ -259,7 +268,11 @@ class DocumentIngestionService:
         """Read uploads with a hard limit instead of buffering unbounded request data."""
 
         file_type = infer_file_type(original_filename)
-        limit = settings.pdf_max_file_bytes if file_type == "pdf" else settings.document_max_upload_bytes
+        limit = (
+            settings.pdf_max_file_bytes
+            if file_type == "pdf"
+            else settings.document_max_upload_bytes
+        )
         declared_size = getattr(file, "size", None)
         if declared_size is not None and declared_size > limit:
             raise APIError(
@@ -331,7 +344,9 @@ class DocumentIngestionService:
     ) -> ReindexResponse:
         document = self._get_document(document_id)
         if document.status == DocumentStatus.ARCHIVED.value:
-            raise APIError(ErrorCode.INVALID_REQUEST, "Archived documents cannot be reindexed.", 400)
+            raise APIError(
+                ErrorCode.INVALID_REQUEST, "Archived documents cannot be reindexed.", 400
+            )
         if not Path(document.file_path).exists():
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -382,11 +397,17 @@ class DocumentIngestionService:
         artifact_paths = [
             path for path in (document.file_path, document.markdown_path, *image_paths) if path
         ]
-        self.db.execute(delete(AuditEvent).where(
-            AuditEvent.target_type == "document", AuditEvent.target_id == document.id
-        ))
-        self.db.execute(delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document.id))
-        self.db.execute(delete(DocumentPermission).where(DocumentPermission.document_id == document.id))
+        self.db.execute(
+            delete(AuditEvent).where(
+                AuditEvent.target_type == "document", AuditEvent.target_id == document.id
+            )
+        )
+        self.db.execute(
+            delete(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document.id)
+        )
+        self.db.execute(
+            delete(DocumentPermission).where(DocumentPermission.document_id == document.id)
+        )
         self.db.execute(delete(DocumentImage).where(DocumentImage.document_id == document.id))
         self.db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
         self.db.delete(document)
@@ -521,7 +542,9 @@ class DocumentIngestionService:
 
         # Do not call MarkItDown for PDFs here: it would reopen the same file after
         # pypdf has already supplied the normalized text used by image extraction.
-        converted_markdown = self.markdown_converter.from_extracted_text(document.title, parsed.text)
+        converted_markdown = self.markdown_converter.from_extracted_text(
+            document.title, parsed.text
+        )
         converted_markdown = self._append_image_markdown(converted_markdown, image_models)
         if not converted_markdown.strip():
             document.status = DocumentStatus.FAILED.value
@@ -629,8 +652,18 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
 
-        converted_markdown = await self.markdown_converter.convert_local(document.file_path)
-        parsed = await self.office_parser.parse(document.file_path, file_type=document.file_type)
+        prepared = await self.office_preparation.prepare(
+            document.file_path,
+            document.file_type,
+        )
+        try:
+            converted_markdown = await self.markdown_converter.convert_prepared_local(prepared.path)
+            parsed = self.office_parser.parse_prepared(
+                prepared.path,
+                prepared.file_type,
+            )
+        finally:
+            prepared.close()
         document.page_count = parsed.page_count
         document.ocr_required = False
         document.ocr_confidence = None
@@ -657,7 +690,9 @@ class DocumentIngestionService:
             markdown_path=markdown_path,
         )
         if not chunks:
-            raise APIError(ErrorCode.INVALID_REQUEST, "Office document did not produce any chunks.", 400)
+            raise APIError(
+                ErrorCode.INVALID_REQUEST, "Office document did not produce any chunks.", 400
+            )
 
         document.status = DocumentStatus.EMBEDDING.value
         self.db.commit()

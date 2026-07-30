@@ -20,6 +20,7 @@ from app.schemas.analysis import AnalysisJobCreate, AnalysisPlan
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.audit_service import AuditService
 from app.services.session_service import SessionService
+from app.services.spreadsheet_analysis_service import SpreadsheetAnalysisService
 from app.services.workspace_service import WorkspaceService
 from app.storage.workspace_storage import WorkspaceStorage
 
@@ -57,6 +58,7 @@ def _workbook(path: Path) -> None:
 
 def test_workspace_file_is_reusable_from_another_linked_session(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     engine = _engine()
     path = tmp_path / "production.xlsx"
@@ -89,7 +91,10 @@ def test_workspace_file_is_reusable_from_another_linked_session(
         db.add(source)
         db.commit()
 
-        job = AnalysisJobService(db).create(
+        job = AnalysisJobService(
+            db,
+            SpreadsheetAnalysisService(office_preparation),
+        ).create(
             AnalysisJobCreate(
                 file_id=source.id,
                 session_id=second.id,
@@ -111,6 +116,7 @@ def test_workspace_file_is_reusable_from_another_linked_session(
 
 def test_workspace_permissions_control_reuse(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     engine = _engine()
     path = tmp_path / "production.xlsx"
@@ -177,7 +183,10 @@ def test_workspace_permissions_control_reuse(
         )
         assert total == 0
         with pytest.raises(APIError, match="write permission"):
-            AnalysisJobService(db).create(
+            AnalysisJobService(
+                db,
+                SpreadsheetAnalysisService(office_preparation),
+            ).create(
                 AnalysisJobCreate(
                     file_id=source.id,
                     plan=AnalysisPlan(select=["Machine"]),
@@ -193,7 +202,10 @@ def test_workspace_permissions_control_reuse(
             principal=owner,
         )
         assert workspace_service.permission_level(analyst, workspace) == PermissionLevel.WRITE
-        shared_job = AnalysisJobService(db).create(
+        shared_job = AnalysisJobService(
+            db,
+            SpreadsheetAnalysisService(office_preparation),
+        ).create(
             AnalysisJobCreate(
                 file_id=source.id,
                 session_id=analyst_session.id,

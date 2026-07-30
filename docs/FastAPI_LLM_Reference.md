@@ -3,7 +3,7 @@ document_id: lm-agent-fastapi-llm-reference
 document_type: api_contract_companion
 language: zh-TW
 api_name: LM Agent API
-api_version: 0.12.0
+api_version: 0.13.0
 base_path: /api/v1
 branch: codex/session-analysis-workspace
 updated_at: 2026-07-30
@@ -33,7 +33,7 @@ legacy_detail: docs/Fastapi_spec.md
 ```yaml
 service:
   title: LM Agent API
-  version: 0.12.0
+  version: 0.13.0
   base_path: /api/v1
   docs:
     swagger: /docs
@@ -432,6 +432,8 @@ AnalysisFileUploadMultipart:
     - one of session_id or workspace_id is required
     - when session_id is supplied, the backend resolves or links its Workspace
     - when session_id is omitted, workspace_id is required and workspace-write is checked
+    - xlsx is opened read-only through Excel COM before any OpenXML parser
+    - Office COM failure is returned later through profile_error with an OFFICE_* code
 
 AnalysisFileUploadResponse:
   file_id: UUID

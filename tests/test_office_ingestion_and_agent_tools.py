@@ -15,6 +15,7 @@ from app.integrations.openai_compatible_client import (
 )
 from app.services.agent_tool_service import AgentToolService
 from app.services.chunking_service import ChunkingService
+from app.services.office_file_preparation_service import OfficeFilePreparationService
 from app.services.office_parser_service import OfficeParserService
 from app.utils.file_utils import is_supported_upload
 
@@ -91,7 +92,11 @@ def _write_pptx(path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_office_parser_extracts_word_excel_and_powerpoint_text(tmp_path: Path) -> None:
+async def test_office_parser_extracts_word_excel_and_powerpoint_text(
+    tmp_path: Path,
+    office_preparation: OfficeFilePreparationService,
+    office_backend,
+) -> None:
     docx_path = tmp_path / "policy.docx"
     xlsx_path = tmp_path / "risks.xlsx"
     pptx_path = tmp_path / "roadmap.pptx"
@@ -99,7 +104,7 @@ async def test_office_parser_extracts_word_excel_and_powerpoint_text(tmp_path: P
     _write_xlsx(xlsx_path)
     _write_pptx(pptx_path)
 
-    parser = OfficeParserService()
+    parser = OfficeParserService(office_preparation)
     docx = await parser.parse(docx_path)
     xlsx = await parser.parse(xlsx_path)
     pptx = await parser.parse(pptx_path)
@@ -111,6 +116,7 @@ async def test_office_parser_extracts_word_excel_and_powerpoint_text(tmp_path: P
     assert "Data leakage" in xlsx.text
     assert pptx.page_count == 1
     assert "Security roadmap" in pptx.text
+    assert [call[2] for call in office_backend.calls] == ["docx", "xlsx", "pptx"]
 
 
 def test_office_upload_types_and_chunk_metadata() -> None:
@@ -145,7 +151,7 @@ async def test_openai_client_sends_and_parses_tool_calls() -> None:
                                     "type": "function",
                                     "function": {
                                         "name": "search_documents",
-                                        "arguments": "{\"query\":\"retention\"}",
+                                        "arguments": '{"query":"retention"}',
                                     },
                                 }
                             ],
@@ -166,7 +172,7 @@ async def test_openai_client_sends_and_parses_tool_calls() -> None:
     assert captured["payload"]["tool_choice"] == "auto"
     assert captured["payload"]["tools"][0]["function"]["name"] == "search_documents"
     assert result.tool_calls == [
-        ChatToolCall(id="call_1", name="search_documents", arguments="{\"query\":\"retention\"}")
+        ChatToolCall(id="call_1", name="search_documents", arguments='{"query":"retention"}')
     ]
 
 

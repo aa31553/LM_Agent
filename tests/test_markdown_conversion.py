@@ -1,5 +1,5 @@
-from pathlib import Path
 import zipfile
+from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
@@ -7,6 +7,7 @@ from pptx import Presentation
 
 from app.services.chunking_service import ChunkingService
 from app.services.markdown_conversion_service import MarkdownConversionService
+from app.services.office_file_preparation_service import OfficeFilePreparationService
 from app.storage.local_storage import LocalStorage
 
 
@@ -62,7 +63,11 @@ def test_markdown_chunking_preserves_structure_and_marks_provenance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_markitdown_converts_supported_office_formats(tmp_path: Path) -> None:
+async def test_real_markitdown_converts_supported_office_formats(
+    tmp_path: Path,
+    office_preparation: OfficeFilePreparationService,
+    office_backend,
+) -> None:
     docx_path = tmp_path / "policy.docx"
     with zipfile.ZipFile(docx_path, "w") as archive:
         archive.writestr(
@@ -87,7 +92,7 @@ async def test_real_markitdown_converts_supported_office_formats(tmp_path: Path)
     slide.placeholders[1].text = "Enable agent tools carefully."
     deck.save(pptx_path)
 
-    converter = MarkdownConversionService()
+    converter = MarkdownConversionService(office_preparation=office_preparation)
     converted = {
         path.suffix: await converter.convert_local(path)
         for path in (docx_path, xlsx_path, pptx_path)
@@ -96,3 +101,4 @@ async def test_real_markitdown_converts_supported_office_formats(tmp_path: Path)
     assert "Retention policy" in converted[".docx"]
     assert "| Metric | Value |" in converted[".xlsx"]
     assert "# Security roadmap" in converted[".pptx"]
+    assert [call[2] for call in office_backend.calls] == ["docx", "xlsx", "pptx"]

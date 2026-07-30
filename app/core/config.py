@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.12.0"
+    app_version: str = "0.13.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: float = Field(default=2.0, gt=0)
     worker_job_timeout_seconds: int = Field(default=900, ge=1)
     worker_retry_attempts: int = Field(default=2, ge=1)
+    office_com_timeout_seconds: int = Field(default=300, ge=1)
     document_max_upload_bytes: int = Field(default=100_000_000, ge=1)
     pdf_max_file_bytes: int = Field(default=50_000_000, ge=1)
     pdf_max_pages: int = Field(default=200, ge=1)

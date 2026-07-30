@@ -4,23 +4,44 @@ from typing import Protocol
 
 from markitdown import MarkItDown
 
+from app.services.office_file_preparation_service import (
+    OFFICE_OPENXML_TYPES,
+    OfficeFilePreparationService,
+)
+
 
 class MarkdownConverter(Protocol):
-    def convert_local(self, path: str | Path):
-        ...
+    def convert_local(self, path: str | Path): ...
 
 
 class MarkdownConversionService:
     """Convert server-owned local artifacts to Markdown using MarkItDown."""
 
-    def __init__(self, converter: MarkdownConverter | None = None) -> None:
+    def __init__(
+        self,
+        converter: MarkdownConverter | None = None,
+        office_preparation: OfficeFilePreparationService | None = None,
+    ) -> None:
         self.converter = converter or MarkItDown(enable_plugins=False)
+        self.office_preparation = office_preparation or OfficeFilePreparationService()
 
     async def convert_local(self, file_path: str | Path) -> str:
         path = Path(file_path)
         if not path.is_file():
             raise FileNotFoundError(f"Document artifact does not exist: {path}")
 
+        if path.suffix.lower().lstrip(".") in OFFICE_OPENXML_TYPES:
+            prepared = await self.office_preparation.prepare(path)
+            try:
+                return await self.convert_prepared_local(prepared.path)
+            finally:
+                prepared.close()
+        return await self.convert_prepared_local(path)
+
+    async def convert_prepared_local(self, file_path: str | Path) -> str:
+        path = Path(file_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Document artifact does not exist: {path}")
         result = await asyncio.to_thread(self.converter.convert_local, path)
         text = getattr(result, "text_content", None)
         if text is None:

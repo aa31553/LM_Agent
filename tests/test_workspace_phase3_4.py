@@ -58,6 +58,7 @@ def _workbook(path: Path, rows: list[list], *, sheet: str = "Data") -> None:
 
 def test_background_preprocessing_converts_each_sheet_to_parquet(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     path = tmp_path / "production.xlsx"
     workbook = Workbook()
@@ -73,7 +74,8 @@ def test_background_preprocessing_converts_each_sheet_to_parquet(
     workspace_id = uuid4()
     file_id = uuid4()
     result = SpreadsheetIngestionService(
-        WorkspaceStorage(root=str(tmp_path / "storage"))
+        WorkspaceStorage(root=str(tmp_path / "storage")),
+        office_preparation,
     ).profile_and_convert(
         workspace_id=workspace_id,
         file_id=file_id,
@@ -95,6 +97,7 @@ def test_background_preprocessing_converts_each_sheet_to_parquet(
 
 def test_polars_query_supports_join_date_bucket_percentile_pivot_and_correlation(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     storage = WorkspaceStorage(root=str(tmp_path / "storage"))
     workspace_id = uuid4()
@@ -117,13 +120,19 @@ def test_polars_query_supports_join_date_bucket_percentile_pivot_and_correlation
         [["Machine", "Line"], ["A", "L1"], ["B", "L2"]],
         sheet="Machines",
     )
-    production = SpreadsheetIngestionService(storage).profile_and_convert(
+    production = SpreadsheetIngestionService(
+        storage,
+        office_preparation,
+    ).profile_and_convert(
         workspace_id=workspace_id,
         file_id=production_file_id,
         file_path=str(production_path),
         file_type="xlsx",
     )["dataset_manifest"]
-    machines = SpreadsheetIngestionService(storage).profile_and_convert(
+    machines = SpreadsheetIngestionService(
+        storage,
+        office_preparation,
+    ).profile_and_convert(
         workspace_id=workspace_id,
         file_id=machine_file_id,
         file_path=str(machine_path),
@@ -263,6 +272,7 @@ class _PlanLLM:
 @pytest.mark.asyncio
 async def test_natural_language_plan_requires_explicit_confirmation(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -278,7 +288,10 @@ async def test_natural_language_plan_requires_explicit_confirmation(
         db.add(session)
         db.flush()
         file_id = uuid4()
-        ingested = SpreadsheetIngestionService(storage).profile_and_convert(
+        ingested = SpreadsheetIngestionService(
+            storage,
+            office_preparation,
+        ).profile_and_convert(
             workspace_id=workspace.id,
             file_id=file_id,
             file_path=str(path),

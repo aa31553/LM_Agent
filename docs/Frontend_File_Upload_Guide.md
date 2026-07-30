@@ -1,7 +1,7 @@
 # LM Agent 前端檔案上傳與分析串接指南
 
 > 適用分支：`codex/session-analysis-workspace`<br>
-> API 版本：`0.12.0`<br>
+> API 版本：`0.13.0`<br>
 > 更新日期：2026-07-30<br>
 > 執行時最終契約：`GET /openapi.json`
 
@@ -22,6 +22,12 @@
 
 反過來，`/analysis/files/upload` 只接受 `.xlsx` 與 `.csv`，不會建立文件 chunk、
 Embedding 或知識庫內容，也不能直接用附件問答 API 檢索。
+
+DOCX／XLSX／PPTX 的前端請求格式不變。後端 worker 會先以 pywin32 呼叫實際
+Word／Excel／PowerPoint 開啟原檔，再將暫存 OpenXML 副本交給既有解析流程。
+若公司加密授權不足，前端會在文件 `error_message` 或分析檔 `profile_error`
+看到 `OFFICE_OPEN_FAILED` 等穩定錯誤碼，不應再將它顯示成一般亂碼或
+`BadZipFile`。
 
 ## 2. 前端共用設定
 

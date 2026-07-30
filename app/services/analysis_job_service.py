@@ -40,9 +40,13 @@ from app.workers.process_runner import (
 
 
 class AnalysisJobService:
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        spreadsheet_service: SpreadsheetAnalysisService | None = None,
+    ) -> None:
         self.db = db
-        self.spreadsheet_service = SpreadsheetAnalysisService()
+        self.spreadsheet_service = spreadsheet_service or SpreadsheetAnalysisService()
 
     def create(
         self,

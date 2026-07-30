@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.schemas.analysis import AnalysisPlan, FilterCondition
+from app.services.office_file_preparation_service import OfficeFilePreparationService
 
 
 class SpreadsheetAnalysisService:
@@ -23,13 +24,50 @@ class SpreadsheetAnalysisService:
 
     SUPPORTED_TYPES: ClassVar[set[str]] = {"xlsx", "csv"}
 
+    def __init__(
+        self,
+        office_preparation: OfficeFilePreparationService | None = None,
+    ) -> None:
+        self.office_preparation = office_preparation or OfficeFilePreparationService()
+
     def inspect(self, file_path: str, file_type: str) -> list[dict[str, Any]]:
+        normalized_type = self._ensure_supported(file_type)
+        if normalized_type == "xlsx":
+            with self.office_preparation.prepare_bounded_sync(
+                file_path, normalized_type
+            ) as prepared:
+                return self.inspect_prepared(str(prepared.path), normalized_type)
+        return self.inspect_prepared(file_path, normalized_type)
+
+    def inspect_prepared(
+        self,
+        file_path: str,
+        file_type: str,
+    ) -> list[dict[str, Any]]:
         normalized_type = self._ensure_supported(file_type)
         if normalized_type == "xlsx":
             return self._inspect_xlsx(file_path)
         return [self._inspect_csv(file_path)]
 
     def validate_plan(
+        self,
+        file_path: str,
+        file_type: str,
+        plan: AnalysisPlan,
+    ) -> tuple[AnalysisPlan, list[str]]:
+        normalized_type = self._ensure_supported(file_type)
+        if normalized_type == "xlsx":
+            with self.office_preparation.prepare_bounded_sync(
+                file_path, normalized_type
+            ) as prepared:
+                return self.validate_prepared(
+                    str(prepared.path),
+                    normalized_type,
+                    plan,
+                )
+        return self.validate_prepared(file_path, normalized_type, plan)
+
+    def validate_prepared(
         self,
         file_path: str,
         file_type: str,
@@ -48,7 +86,7 @@ class SpreadsheetAnalysisService:
                 "Advanced operations require preprocessed dataset sources.",
                 400,
             )
-        sheets = self.inspect(file_path, file_type)
+        sheets = self.inspect_prepared(file_path, file_type)
         selected_sheet = self._select_sheet(sheets, plan.sheet)
         source_headers = {item["name"]: item for item in selected_sheet["columns"]}
         aggregation_aliases = {item.alias for item in plan.aggregations}
@@ -120,7 +158,25 @@ class SpreadsheetAnalysisService:
         file_type: str,
         plan: AnalysisPlan,
     ) -> dict[str, Any]:
-        normalized, warnings = self.validate_plan(file_path, file_type, plan)
+        normalized_type = self._ensure_supported(file_type)
+        if normalized_type == "xlsx":
+            with self.office_preparation.prepare_bounded_sync(
+                file_path, normalized_type
+            ) as prepared:
+                return self.execute_prepared(
+                    str(prepared.path),
+                    normalized_type,
+                    plan,
+                )
+        return self.execute_prepared(file_path, normalized_type, plan)
+
+    def execute_prepared(
+        self,
+        file_path: str,
+        file_type: str,
+        plan: AnalysisPlan,
+    ) -> dict[str, Any]:
+        normalized, warnings = self.validate_prepared(file_path, file_type, plan)
         processed_rows = 0
         matched_rows = 0
         extracted_rows: list[dict[str, Any]] = []

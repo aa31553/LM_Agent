@@ -17,13 +17,24 @@ Office files use the same indexing pipeline as PDF and image uploads:
 
 1. Upload file through `POST /api/v1/documents/upload`.
 2. The original file is saved under `LOCAL_STORAGE_ROOT/originals/`.
-3. The background document job invokes Microsoft MarkItDown through its local-file-only API.
-4. UTF-8 Markdown is saved under `LOCAL_STORAGE_ROOT/markdown/`.
-5. Markdown is chunked with `source_type=markdown`, embedded, and indexed.
-6. Document status becomes `ready`.
+3. The Windows document worker starts a bounded child process.
+4. `pywin32` starts Word, Excel, or PowerPoint under the worker identity, disables macros and
+   link updates, opens the original read-only, and saves a temporary OpenXML copy.
+5. The job verifies that the copy is a non-empty OpenXML ZIP and invokes MarkItDown plus the
+   local parser on the copy.
+6. The temporary copy is deleted.
+7. UTF-8 Markdown is saved under `LOCAL_STORAGE_ROOT/markdown/`.
+8. Markdown is chunked with `source_type=markdown`, embedded, and indexed.
+9. Document status becomes `ready`.
 
-No Microsoft Office or LibreOffice installation is required. MarkItDown's format-specific
-dependencies are installed with the application.
+Microsoft Office desktop, `pywin32`, and Windows are required. The document worker account must
+be signed in or otherwise licensed and authorized for the organization's Microsoft 365,
+Purview/AIP, RMS, or sensitivity-label policy. The implementation does not bypass encryption:
+Office must grant the worker account permission to open and create the temporary parser copy.
+Run Office-capable workers under a dedicated, initialized Windows user profile; do not use an
+unlicensed service identity. Desktop Office automation can display policy or sign-in dialogs, so
+production deployments must monitor timeouts and validate representative protected files with
+the exact worker identity before accepting traffic.
 
 PDFs and images use the same normalization boundary. Scanned PDFs and direct image uploads
 keep the existing local OCR fallback, then write the OCR result into the generated Markdown.
@@ -122,10 +133,22 @@ If the selected model or local runtime does not support tool calls, leave `use_t
 
 ## Validation
 
+First validate the exact identity used to run both Office-capable workers:
+
+```powershell
+.\.venv\Scripts\python -m app.scripts.validate_office_com E:\samples\protected.xlsx
+```
+
+Expected output starts with:
+
+```text
+OFFICE_COM_OK
+```
+
 Run the focused validation:
 
 ```powershell
-.\.venv\Scripts\python -m pytest tests\test_office_ingestion_and_agent_tools.py
+.\.venv\Scripts\python -m pytest tests\test_office_file_preparation.py tests\test_office_ingestion_and_agent_tools.py
 ```
 
 Run the full regression suite:
@@ -134,15 +157,17 @@ Run the full regression suite:
 .\.venv\Scripts\python -m pytest
 ```
 
-Successful validation for this change:
-
-- `tests/test_office_ingestion_and_agent_tools.py`: 4 passed
-- Full suite: 37 passed, 1 skipped
-
 ## Operations Notes
 
 - Empty Office files fail with `Office document did not contain extractable text.`
-- Corrupted OpenXML files fail with a 400-level invalid request error.
+- `OFFICE_COM_UNAVAILABLE`: not Windows, `pywin32` missing, or Office unavailable.
+- `OFFICE_APPLICATION_UNAVAILABLE`: Word, Excel, or PowerPoint could not start.
+- `OFFICE_OPEN_FAILED`: the identity cannot decrypt/open the file, an opening password is
+  required, or the file is damaged.
+- `OFFICE_NORMALIZATION_FAILED`: Office opened the file but could not save the temporary copy.
+- `OFFICE_OUTPUT_STILL_PROTECTED`: the copy remained encrypted and is not sent to OpenXML parsers.
 - Excel ingestion indexes visible sheet rows and includes sheet names in chunk text.
 - PowerPoint ingestion indexes text from slides.
+- `OFFICE_COM_TIMEOUT_SECONDS` defaults to 300 seconds. The child process is terminated on
+  timeout so a hidden Office dialog cannot permanently block a worker.
 - Tool calling is intended for bounded internal tools. Add new tools only through `AgentToolService.tool_schemas()` and `AgentToolService.execute_tool()` so permission checks remain centralized.

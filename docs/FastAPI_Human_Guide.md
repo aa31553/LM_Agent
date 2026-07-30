@@ -1,7 +1,7 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/session-analysis-workspace`<br>
-> API 版本：`0.12.0`<br>
+> API 版本：`0.13.0`<br>
 > 更新日期：2026-07-30
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。前端檔案流程與
@@ -40,6 +40,17 @@ python -m app.workers.document_tasks
 ```bash
 python -m app.workers.analysis_tasks
 ```
+
+Office 路徑（DOCX、XLSX、PPTX）必須部署於 Windows，並安裝 Microsoft Office
+桌面版與 `pywin32`。`document_tasks` 與 `analysis_tasks` 的執行帳號必須具有公司
+Purview/AIP/RMS 加密文件的開啟及另存權限。以相同帳號執行：
+
+```powershell
+.\.venv\Scripts\python -m app.scripts.validate_office_com E:\samples\protected.xlsx
+```
+
+只有出現 `OFFICE_COM_OK` 才代表該帳號可完成實際 Office 開啟與暫存 OpenXML
+輸出；單純成功 `import win32com` 並不足以驗證企業加密權限。
 
 API 行程只負責上傳、建立處理工作與查詢狀態。PDF 的 `pypdf`、OCR 與可選的
 內嵌圖片處理不會在 Uvicorn 內執行。預設限制為 50 MB、200 頁、單頁 20 秒與整體
@@ -231,7 +242,8 @@ DELETE /api/v1/chat/sessions/{session_id}
 分析檔不會建立 chunk 或 Embedding，也不會進入知識庫。後端只執行白名單
 `AnalysisPlan`，不執行 LLM 產生的 Python、SQL 或 JavaScript；31B LLM 只產生
 待確認的受限 JSON 或解釋已完成結果。XLSX 每個 Sheet 會在背景轉為 Parquet，
-查詢使用 DuckDB／Polars。支援多 Sheet／多檔 Join、日期彙總、Pivot、
+但會先由 Excel COM 以唯讀、停用巨集與外部連結更新的方式開啟並另存暫存
+OpenXML 副本；查詢使用 DuckDB／Polars。支援多 Sheet／多檔 Join、日期彙總、Pivot、
 distinct count、percentile、Pearson／Spearman correlation。
 同一 Workspace 的不同 Session 可重複使用同一個 `file_id`，不需重新上傳。
 完整請求、回應與 TypeScript 範例請見

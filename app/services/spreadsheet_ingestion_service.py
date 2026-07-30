@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
+from app.services.office_file_preparation_service import OfficeFilePreparationService
 from app.services.spreadsheet_analysis_service import SpreadsheetAnalysisService
 from app.storage.workspace_storage import WorkspaceStorage
 
@@ -17,9 +18,14 @@ from app.storage.workspace_storage import WorkspaceStorage
 class SpreadsheetIngestionService:
     """Convert XLSX/CSV sources into queryable Parquet datasets and build a profile."""
 
-    def __init__(self, storage: WorkspaceStorage | None = None) -> None:
+    def __init__(
+        self,
+        storage: WorkspaceStorage | None = None,
+        office_preparation: OfficeFilePreparationService | None = None,
+    ) -> None:
         self.storage = storage or WorkspaceStorage()
-        self.legacy = SpreadsheetAnalysisService()
+        self.office_preparation = office_preparation or OfficeFilePreparationService()
+        self.legacy = SpreadsheetAnalysisService(self.office_preparation)
 
     def profile_and_convert(
         self,
@@ -29,10 +35,17 @@ class SpreadsheetIngestionService:
         file_path: str,
         file_type: str,
     ) -> dict[str, Any]:
-        inspection = self.legacy.inspect(file_path, file_type)
         if file_type == "xlsx":
-            datasets = self._convert_xlsx(workspace_id, file_id, file_path)
+            with self.office_preparation.prepare_sync(file_path, file_type) as prepared:
+                prepared_path = str(prepared.path)
+                inspection = self.legacy.inspect_prepared(prepared_path, file_type)
+                datasets = self._convert_xlsx(
+                    workspace_id,
+                    file_id,
+                    prepared_path,
+                )
         else:
+            inspection = self.legacy.inspect(file_path, file_type)
             datasets = [
                 self._convert_csv(
                     workspace_id,

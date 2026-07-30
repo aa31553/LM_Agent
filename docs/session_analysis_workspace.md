@@ -1,7 +1,7 @@
 # Session Attachments and Persistent Spreadsheet Workspace
 
 > Branch: `codex/session-analysis-workspace`<br>
-> API version: `0.12.0`<br>
+> API version: `0.13.0`<br>
 > Updated: 2026-07-30<br>
 > Frontend implementation guide:
 > [Frontend_File_Upload_Guide.md](Frontend_File_Upload_Guide.md)
@@ -15,8 +15,8 @@ questions or explains already-computed results.
 
 | Input | Route | Processing | LLM role |
 |---|---|---|---|
-| PDF, DOCX, PPTX, image, text | `POST /api/v1/documents/upload` with `scope=session` | Existing document worker converts to Markdown, chunks, embeds, and indexes only for the session | Answer from retrieved chunks |
-| XLSX or CSV for exact analysis | `POST /api/v1/analysis/files/upload` | Stored under a persistent Workspace; no chunks or embeddings are created | Optional explanation after calculation |
+| PDF, DOCX, PPTX, image, text | `POST /api/v1/documents/upload` with `scope=session` | Office files first use pywin32 COM; the document worker then converts to Markdown, chunks, embeds, and indexes only for the session | Answer from retrieved chunks |
+| XLSX or CSV for exact analysis | `POST /api/v1/analysis/files/upload` | XLSX first uses Excel COM, then is stored and profiled under a persistent Workspace; no chunks or embeddings are created | Optional explanation after calculation |
 
 Large spreadsheets must use the analysis route. They are not inserted into the
 knowledge base and are not treated as RAG documents.
@@ -188,8 +188,8 @@ Inspection returns additive `warnings` fields at response and sheet level. The
 sheet payload also includes `formula_cells_in_sample` and
 `formatted_cells_in_sample`.
 
-- Formula cells use the cached value last saved by Excel. The backend does not
-  recalculate formulas.
+- Excel COM uses manual calculation and disables calculate-before-save. Formula
+  cells therefore use the cached value from the source workbook.
 - A formula with no cached value is returned as null and produces a warning.
 - Date, percentage, number, and leading-zero display formats are not preserved in
   result JSON; calculations use the underlying cell value.
@@ -265,7 +265,8 @@ profile tasks before analysis Jobs:
 
 ```text
 original XLSX/CSV
-  -> read-only streaming extraction
+  -> XLSX only: Excel COM read-only open + temporary OpenXML save
+  -> openpyxl reads only the COM-normalized copy
   -> DuckDB CSV inference / Parquet conversion
   -> Polars lazy schema and null profiling
   -> profile.json + dataset_manifest
@@ -273,8 +274,8 @@ original XLSX/CSV
 ```
 
 Each XLSX Sheet becomes a separate Parquet dataset. CSV becomes one `CSV`
-dataset. Original files remain unchanged. Formula values still use the cache last
-saved by Excel and VBA is never executed.
+dataset. Original files remain unchanged, the temporary copy is deleted, formula
+values use the source cache, and VBA is disabled and never executed.
 
 Advanced Jobs read only server-created `dataset_manifest` paths. User or model
 text cannot supply filesystem paths. Column references, Join keys, aggregations,

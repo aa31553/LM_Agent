@@ -9,7 +9,7 @@
 
 # 文件二：FastAPI API 規格書
 
-> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.12.0`；
+> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.13.0`；
 > 更新日期：2026-07-30。
 >
 > LLM / agent 讀取入口：本文件描述語意與生命週期；執行時的機器可讀 schema 為
@@ -126,6 +126,11 @@ PDF 上傳僅建立文件與處理工作；需要獨立啟動
 `python -m app.workers.document_tasks`。PDF 處理不在 FastAPI/Uvicorn 行程內執行，並預設
 限制檔案為 50 MB、200 頁、單頁 20 秒、整體 10 分鐘。只有無可擷取文字的 PDF 才會整份
 OCR；PDF 圖片擷取與圖片 OCR 預設關閉，可由 `PDF_IMAGE_*` 環境設定開啟並限制數量。
+
+DOCX／XLSX／PPTX 由 Windows worker 先以 pywin32 呼叫 Word／Excel／PowerPoint
+唯讀開啟，再另存短期 OpenXML 副本供 MarkItDown、OpenXML parser 或 openpyxl 使用；
+原檔不修改，暫存處理後刪除。兩個 Office-capable worker 的帳號必須具有公司
+Purview/AIP/RMS 解密與另存權限。
 
 ---
 
@@ -677,18 +682,19 @@ Analysis API 專門處理不進入知識庫的 `.xlsx`／`.csv` 精確分析。�
 ```mermaid
 flowchart TD
     A["建立／選擇 Workspace"] --> B["上傳 XLSX／CSV"]
-    B --> C["背景 Profiling 與 Parquet 轉換"]
-    C --> D["Inspect Schema 與樣本"]
-    D --> E{"計畫來源"}
-    E -->|前端建立| F["Validate AnalysisPlan"]
-    E -->|自然語言| G["產生受限 PlanDraft"]
-    G --> H["使用者確認／編輯"]
-    F --> I["建立 Job"]
-    H --> I
-    I --> J["Worker 執行 DuckDB／Polars 分析"]
-    J --> K["Table／Chart Schema"]
-    K --> L["ECharts／報表／匯出"]
-    K --> M["Hybrid KB 回答"]
+    B --> C["XLSX：Excel COM 正規化"]
+    C --> D["背景 Profiling 與 Parquet 轉換"]
+    D --> E["Inspect Schema 與樣本"]
+    E --> F{"計畫來源"}
+    F -->|前端建立| G["Validate AnalysisPlan"]
+    F -->|自然語言| H["產生受限 PlanDraft"]
+    H --> I["使用者確認／編輯"]
+    G --> J["建立 Job"]
+    I --> J
+    J --> K["Worker 執行 DuckDB／Polars 分析"]
+    K --> L["Table／Chart Schema"]
+    L --> M["ECharts／報表／匯出"]
+    L --> N["Hybrid KB 回答"]
 ```
 
 直接計畫與自然語言草稿是兩條替代路徑：
@@ -796,8 +802,9 @@ profile_queued -> profiling -> ready
 ```
 
 只有 `ready` 可 inspect 或建立 Job。XLSX 每個 Sheet 轉為獨立 Parquet，CSV 轉為單一
-`CSV` dataset；原檔保持不變。公式只讀取 Excel 最後儲存的快取值，不執行 VBA，
-顯示格式也不會原樣帶入分析結果。Inspect 的 response 與 Sheet 都會回傳 `warnings`。
+`CSV` dataset；原檔保持不變。Excel COM 採手動計算並關閉另存前計算，公式只讀取
+原檔最後儲存的快取值；巨集、事件與外部連結更新均停用。顯示格式不會原樣帶入
+分析結果。Inspect 的 response 與 Sheet 都會回傳 `warnings`。
 
 ### 8.5 AnalysisPlan
 

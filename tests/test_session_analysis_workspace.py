@@ -45,10 +45,11 @@ def _workbook(path: Path) -> None:
 
 def test_xlsx_inspection_and_deterministic_group_statistics(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     path = tmp_path / "production.xlsx"
     _workbook(path)
-    service = SpreadsheetAnalysisService()
+    service = SpreadsheetAnalysisService(office_preparation)
 
     inspection = service.inspect(str(path), "xlsx")
     assert inspection[0]["name"] == "Production"
@@ -130,10 +131,11 @@ def test_csv_cp950_inspection_and_column_extraction(tmp_path: Path) -> None:
 
 def test_invalid_plan_rejects_missing_and_non_numeric_columns(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     path = tmp_path / "production.xlsx"
     _workbook(path)
-    service = SpreadsheetAnalysisService()
+    service = SpreadsheetAnalysisService(office_preparation)
 
     with pytest.raises(APIError) as missing:
         service.validate_plan(
@@ -161,11 +163,12 @@ def test_invalid_plan_rejects_missing_and_non_numeric_columns(
 
 def test_raw_extraction_sort_is_rejected_to_avoid_inexact_top_n(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     path = tmp_path / "production.xlsx"
     _workbook(path)
     with pytest.raises(APIError, match="Sorting raw extracted rows"):
-        SpreadsheetAnalysisService().validate_plan(
+        SpreadsheetAnalysisService(office_preparation).validate_plan(
             str(path),
             "xlsx",
             AnalysisPlan(
@@ -202,12 +205,13 @@ def test_non_null_filter_operators_require_a_value() -> None:
 def test_raw_result_reports_total_matches_when_rows_are_truncated(
     tmp_path: Path,
     monkeypatch,
+    office_preparation,
 ) -> None:
     path = tmp_path / "production.xlsx"
     _workbook(path)
     monkeypatch.setattr(settings, "analysis_result_max_rows", 2)
 
-    result = SpreadsheetAnalysisService().execute(
+    result = SpreadsheetAnalysisService(office_preparation).execute(
         str(path),
         "xlsx",
         AnalysisPlan(select=["Machine"], limit=3),
@@ -225,6 +229,7 @@ def test_raw_result_reports_total_matches_when_rows_are_truncated(
 
 def test_xlsx_inspection_warns_about_formulas_and_display_formats(
     tmp_path: Path,
+    office_preparation,
 ) -> None:
     path = tmp_path / "formatted.xlsx"
     workbook = Workbook()
@@ -235,7 +240,10 @@ def test_xlsx_inspection_warns_about_formulas_and_display_formats(
     sheet["A2"].number_format = "0.0%"
     workbook.save(path)
 
-    inspection = SpreadsheetAnalysisService().inspect(str(path), "xlsx")
+    inspection = SpreadsheetAnalysisService(office_preparation).inspect(
+        str(path),
+        "xlsx",
+    )
     metrics = inspection[0]
 
     assert metrics["formula_cells_in_sample"] == 1
@@ -245,7 +253,10 @@ def test_xlsx_inspection_warns_about_formulas_and_display_formats(
     assert any("no cached value" in item for item in metrics["warnings"])
 
 
-def test_analysis_job_list_cancel_and_retry(tmp_path: Path) -> None:
+def test_analysis_job_list_cancel_and_retry(
+    tmp_path: Path,
+    office_preparation,
+) -> None:
     engine = create_engine("sqlite:///:memory:")
     for table in (
         User.__table__,
@@ -299,7 +310,10 @@ def test_analysis_job_list_cancel_and_retry(tmp_path: Path) -> None:
         db.add(source)
         db.commit()
 
-        service = AnalysisJobService(db)
+        service = AnalysisJobService(
+            db,
+            SpreadsheetAnalysisService(office_preparation),
+        )
         queued = service.create(
             AnalysisJobCreate(
                 file_id=source.id,

@@ -212,7 +212,7 @@ Included in the MVP:
 - Document and knowledge base permissions
 - DLP for query, context, and response
 - Audit logging
-- Word / Excel / PowerPoint OpenXML ingestion
+- Word / Excel / PowerPoint OpenXML ingestion through Windows Office COM
 - Text and structured ingestion: TXT, Markdown, LOG, CSV, JSON, YAML, HTML, and XML
 - Bounded agent tool calling for document search and document status
 - Docker Compose deployment model
@@ -391,7 +391,11 @@ See [Skills administration](docs/admin/skills.md) for the API and storage contra
 
 ## Document Processing
 
-Office and image uploads are normalized through Microsoft MarkItDown before indexing.
+Office uploads are first opened by Word, Excel, or PowerPoint through `pywin32` under the
+document worker's Windows identity. Office saves a short-lived OpenXML copy, and only that
+copy is passed to MarkItDown and the local parser. This lets an authorized worker identity
+open enterprise-protected documents without sending encrypted bytes directly to OpenXML
+libraries. Image uploads continue to use MarkItDown before indexing.
 PDF uploads use one process-isolated `pypdf` pass for text and optional embedded-image
 extraction so the same PDF is not reopened by multiple parsers. The original artifact and
 its generated Markdown are retained separately:
@@ -425,6 +429,8 @@ Office / Image Upload
   ->
 Save Original Artifact
   ->
+Office only: bounded pywin32 child process opens read-only and saves temporary OpenXML
+  ->
 MarkItDown convert_local()
   ->
 OCR fallback for images
@@ -444,6 +450,19 @@ Store Chunks and Vectors
 points to the generated Markdown. Retrieval chunks always use `source_type=markdown`.
 LLM requests receive Markdown-derived text context only; original files and binary images
 are not attached to model calls.
+
+Office processing requires Windows, `pywin32`, a locally installed Microsoft Office desktop
+suite, and a worker account that can open the organization's protected documents. Macros,
+events, and external-link updates are disabled; originals are never modified. Validate the
+actual service identity with an authorized sample before production:
+
+```powershell
+.\.venv\Scripts\python -m app.scripts.validate_office_com E:\samples\protected.xlsx
+```
+
+Success prints `OFFICE_COM_OK`. `OFFICE_OPEN_FAILED` usually means the worker identity lacks
+Microsoft 365/Purview/AIP rights, the file needs an opening password, or the file is damaged.
+The temporary copy is deleted after processing.
 
 Document status values:
 

@@ -2,13 +2,14 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 from xml.etree import ElementTree
 
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
+from app.services.office_file_preparation_service import OfficeFilePreparationService
 from app.services.pdf_parser_service import ParsedDocument, ParsedPage
 from app.utils.text_utils import clean_db_text
-
 
 NAMESPACES = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -27,7 +28,13 @@ class ParsedOfficeDocument:
 
 
 class OfficeParserService:
-    supported_types = {"docx", "xlsx", "pptx"}
+    supported_types: ClassVar[set[str]] = {"docx", "xlsx", "pptx"}
+
+    def __init__(
+        self,
+        office_preparation: OfficeFilePreparationService | None = None,
+    ) -> None:
+        self.office_preparation = office_preparation or OfficeFilePreparationService()
 
     async def parse(self, file_path: str | Path, file_type: str | None = None) -> ParsedDocument:
         path = Path(file_path)
@@ -39,23 +46,36 @@ class OfficeParserService:
                 400,
             )
 
+        prepared = await self.office_preparation.prepare(path, detected_type)
+        try:
+            return self.parse_prepared(prepared.path, detected_type)
+        finally:
+            prepared.close()
+
+    def parse_prepared(
+        self,
+        file_path: str | Path,
+        file_type: str,
+    ) -> ParsedDocument:
+        path = Path(file_path)
         try:
             with zipfile.ZipFile(path) as archive:
-                if detected_type == "docx":
+                if file_type == "docx":
                     parsed = self._parse_docx(archive)
-                elif detected_type == "xlsx":
+                elif file_type == "xlsx":
                     parsed = self._parse_xlsx(archive)
                 else:
                     parsed = self._parse_pptx(archive)
         except zipfile.BadZipFile as exc:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
-                "Office document is not a valid OpenXML file.",
+                "The Microsoft Office normalized copy is not valid OpenXML.",
                 400,
             ) from exc
-
         if not parsed.text.strip():
-            raise APIError(ErrorCode.INVALID_REQUEST, "Office document did not contain extractable text.", 400)
+            raise APIError(
+                ErrorCode.INVALID_REQUEST, "Office document did not contain extractable text.", 400
+            )
         return ParsedDocument(
             pages=parsed.pages,
             page_count=parsed.page_count,
@@ -97,7 +117,11 @@ class OfficeParserService:
     def _parse_pptx(self, archive: zipfile.ZipFile) -> ParsedOfficeDocument:
         pages: list[ParsedPage] = []
         slide_names = sorted(
-            (name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
+            (
+                name
+                for name in archive.namelist()
+                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+            ),
             key=lambda item: int(re.search(r"slide(\d+)\.xml$", item).group(1)),  # type: ignore[union-attr]
         )
         for slide_name in slide_names:
@@ -145,8 +169,7 @@ class OfficeParserService:
         rows: list[str] = []
         for row in root.findall(".//s:row", NAMESPACES):
             values = [
-                self._cell_value(cell, shared_strings)
-                for cell in row.findall("s:c", NAMESPACES)
+                self._cell_value(cell, shared_strings) for cell in row.findall("s:c", NAMESPACES)
             ]
             values = [value for value in values if value]
             if values:
@@ -170,9 +193,13 @@ class OfficeParserService:
         try:
             return ElementTree.fromstring(archive.read(member))
         except KeyError as exc:
-            raise APIError(ErrorCode.INVALID_REQUEST, f"Office document is missing {member}.", 400) from exc
+            raise APIError(
+                ErrorCode.INVALID_REQUEST, f"Office document is missing {member}.", 400
+            ) from exc
         except ElementTree.ParseError as exc:
-            raise APIError(ErrorCode.INVALID_REQUEST, f"Office document contains invalid XML in {member}.", 400) from exc
+            raise APIError(
+                ErrorCode.INVALID_REQUEST, f"Office document contains invalid XML in {member}.", 400
+            ) from exc
 
     def _joined_text(self, elements: list[ElementTree.Element]) -> str:
         return "".join(element.text or "" for element in elements).strip()

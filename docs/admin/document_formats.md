@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | PDF | `.pdf` | Isolated `pypdf` text extraction; full OCR only when no text is found. Embedded image extraction/OCR is opt-in and bounded. |
 | Image | `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.webp` | Pillow + local OCR |
-| Office OpenXML | `.docx`, `.xlsx`, `.pptx` | MarkItDown + local OpenXML parser |
+| Office OpenXML | `.docx`, `.xlsx`, `.pptx` | Windows Office COM read-only open/save → temporary OpenXML → MarkItDown + local parser |
 | Text | `.txt`, `.md`, `.markdown`, `.log` | Encoding-aware local parser |
 | Structured | `.csv`, `.json`, `.yaml`, `.yml`, `.html`, `.htm`, `.xml` | Safe local parser to Markdown |
 
@@ -20,8 +20,23 @@ PDF work is never performed by the API/Uvicorn process. Start
 minutes. `PDF_IMAGE_EXTRACTION_ENABLED` and `PDF_IMAGE_OCR_ENABLED` default to `false`; when
 enabled, `PDF_IMAGE_MAX_PAGES`, `PDF_IMAGE_MAX_COUNT`, and `PDF_IMAGE_OCR_MAX_COUNT` bound work.
 
-Legacy binary Office files (`.doc`, `.xls`, `.ppt`) are intentionally rejected. Convert them to
-OpenXML first so the server does not require Microsoft Office or LibreOffice automation.
+Office processing requires Windows, `pywin32`, installed Microsoft Word/Excel/PowerPoint, and a
+worker identity authorized to decrypt the organization's protected files. API/Uvicorn only saves
+the original and queues work. Both `document_tasks` and `analysis_tasks` must run under an
+interactive or service identity whose Office sign-in and Purview/AIP rights are valid.
+
+Legacy binary Office files (`.doc`, `.xls`, `.ppt`) remain intentionally rejected so the public
+upload contract and downstream parsers receive only OpenXML. Open and save them as `.docx`,
+`.xlsx`, or `.pptx` before upload.
+
+Validate the deployed identity with a protected sample:
+
+```powershell
+.\.venv\Scripts\python -m app.scripts.validate_office_com E:\samples\protected.xlsx
+```
+
+The command must print `OFFICE_COM_OK`. A successful import of `win32com` alone does not prove
+that the account can decrypt or export a sensitivity-labeled file.
 
 ## Single source of truth
 
