@@ -126,8 +126,11 @@ class AnalysisOrchestratorService:
                 "alias": "data",
                 "sheet": dataset.get("sheet"),
             }
+        allowed_file_ids = {str(source.id) for source in sources}
+        manifests = {str(source.id): source.dataset_manifest for source in sources}
         (
-            plan,
+            normalized,
+            warnings,
             normalization_actions,
             repair_attempted,
             validation_errors,
@@ -135,17 +138,9 @@ class AnalysisOrchestratorService:
             plan_payload,
             schema_context=schema_context,
             default_source=default_source,
+            manifests=manifests,
+            allowed_file_ids=allowed_file_ids,
         )
-        allowed_file_ids = {str(source.id) for source in sources}
-        referenced_file_ids = {str(source.file_id) for source in plan.sources}
-        if not referenced_file_ids.issubset(allowed_file_ids):
-            raise APIError(
-                ErrorCode.PERMISSION_DENIED,
-                "The drafted plan referenced a file outside the approved source set.",
-                403,
-            )
-        manifests = {str(source.id): source.dataset_manifest for source in sources}
-        normalized, warnings = DatasetQueryService().validate_plan(plan, manifests)
         user = AuditService(self.db).ensure_user(principal)
         draft = AnalysisPlanDraft(
             workspace_id=workspace.id,
@@ -271,14 +266,27 @@ class AnalysisOrchestratorService:
         *,
         schema_context: str,
         default_source: dict | None,
-    ) -> tuple[AnalysisPlan, list[dict], bool, list[str]]:
+        manifests: dict[str, dict],
+        allowed_file_ids: set[str],
+    ) -> tuple[AnalysisPlan, list[str], list[dict], bool, list[str]]:
         candidate = self._with_default_source(plan_payload, default_source)
+        initial_normalization = self.normalizer.normalize(candidate)
+        initial_actions = initial_normalization.actions
         try:
-            normalized = self.normalizer.normalize(candidate)
-            plan = AnalysisPlan.model_validate(normalized.payload)
-            return plan, normalized.actions, False, []
-        except APIError:
-            raise
+            plan, warnings = self._validate_normalized_payload(
+                initial_normalization.payload,
+                manifests=manifests,
+                allowed_file_ids=allowed_file_ids,
+            )
+            return plan, warnings, initial_actions, False, []
+        except APIError as first_error:
+            if first_error.error_code in {
+                ErrorCode.ANALYSIS_INTENT_INVALID,
+                ErrorCode.AMBIGUOUS_CHART_FIELD,
+                ErrorCode.PERMISSION_DENIED,
+            }:
+                raise
+            validation_errors = [self._error_message(first_error)]
         except Exception as first_error:
             validation_errors = [self._error_message(first_error)]
 
@@ -291,19 +299,20 @@ class AnalysisOrchestratorService:
             repaired_payload = self._extract_json(repaired_raw)
             repaired_payload = self._with_default_source(repaired_payload, default_source)
             repaired = self.normalizer.normalize(repaired_payload)
-            plan = AnalysisPlan.model_validate(repaired.payload)
+            plan, warnings = self._validate_normalized_payload(
+                repaired.payload,
+                manifests=manifests,
+                allowed_file_ids=allowed_file_ids,
+            )
+        except APIError as repair_error:
+            if repair_error.error_code == ErrorCode.PERMISSION_DENIED:
+                raise
+            raise self._repair_failed(validation_errors[0], repair_error) from repair_error
         except Exception as repair_error:
-            raise APIError(
-                ErrorCode.ANALYSIS_REPAIR_FAILED,
-                "The LLM analysis plan remained invalid after one repair attempt.",
-                422,
-                details={
-                    "initial_validation_error": validation_errors[0],
-                    "repair_validation_error": self._error_message(repair_error),
-                },
-            ) from repair_error
+            raise self._repair_failed(validation_errors[0], repair_error) from repair_error
 
         actions = [
+            *initial_actions,
             *repaired.actions,
             {
                 "code": "LLM_PLAN_REPAIRED",
@@ -312,7 +321,38 @@ class AnalysisOrchestratorService:
                 "target_field": None,
             },
         ]
-        return plan, actions, True, validation_errors
+        return plan, warnings, actions, True, validation_errors
+
+    def _validate_normalized_payload(
+        self,
+        plan_payload: dict,
+        *,
+        manifests: dict[str, dict],
+        allowed_file_ids: set[str],
+    ) -> tuple[AnalysisPlan, list[str]]:
+        plan = AnalysisPlan.model_validate(plan_payload)
+        referenced_file_ids = {str(source.file_id) for source in plan.sources}
+        if not referenced_file_ids.issubset(allowed_file_ids):
+            raise APIError(
+                ErrorCode.PERMISSION_DENIED,
+                "The drafted plan referenced a file outside the approved source set.",
+                403,
+            )
+        return DatasetQueryService().validate_plan(plan, manifests)
+
+    @staticmethod
+    def _repair_failed(initial_error: str, repair_error: Exception) -> APIError:
+        return APIError(
+            ErrorCode.ANALYSIS_REPAIR_FAILED,
+            "The LLM analysis plan remained invalid after one repair attempt.",
+            422,
+            details={
+                "initial_validation_error": initial_error,
+                "repair_validation_error": AnalysisOrchestratorService._error_message(
+                    repair_error
+                ),
+            },
+        )
 
     @staticmethod
     def _with_default_source(plan_payload: dict, default_source: dict | None) -> dict:
