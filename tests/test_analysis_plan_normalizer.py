@@ -114,7 +114,7 @@ def test_orchestrator_repairs_invalid_plan_at_most_once() -> None:
     llm = FakeRepairLLM('{"select":["Machine"],"limit":100,"charts":[]}')
     service = AnalysisOrchestratorService(None, llm_service=llm)
 
-    plan, actions, attempted, errors = asyncio.run(
+    plan, warnings, actions, attempted, errors = asyncio.run(
         service._normalize_and_validate_plan(
             {"select": ["Machine"], "limit": "invalid", "charts": []},
             schema_context='{"columns":["Machine"]}',
@@ -125,11 +125,35 @@ def test_orchestrator_repairs_invalid_plan_at_most_once() -> None:
     )
 
     assert plan.limit == 100
+    assert warnings == []
     assert attempted is True
     assert errors
     assert actions[-1]["code"] == "LLM_PLAN_REPAIRED"
     assert len(llm.calls) == 1
     assert "禁止輸出 Python" in llm.calls[0]["system_prompt"]
+
+
+
+def test_orchestrator_repairs_dataset_validation_error_once() -> None:
+    llm = FakeRepairLLM('{"select":["Machine"],"limit":100,"charts":[]}')
+    service = AnalysisOrchestratorService(None, llm_service=llm)
+
+    plan, warnings, actions, attempted, errors = asyncio.run(
+        service._normalize_and_validate_plan(
+            {"select": ["MissingColumn"], "charts": []},
+            schema_context='{"columns":["Machine"]}',
+            default_source=DEFAULT_SOURCE,
+            manifests=MANIFESTS,
+            allowed_file_ids={FILE_ID},
+        )
+    )
+
+    assert plan.select == ["Machine"]
+    assert warnings == []
+    assert attempted is True
+    assert errors == ["Analysis plan references columns that are not present."]
+    assert actions[-1]["code"] == "LLM_PLAN_REPAIRED"
+    assert len(llm.calls) == 1
 
 
 def test_orchestrator_stops_after_failed_repair() -> None:
