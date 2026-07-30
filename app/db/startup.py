@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.base import Base
 from app.db.init_db import init_db
 from app.db.session import database_backend, engine
-from app.models.analysis import AnalysisFile, AnalysisJob
+from app.models.analysis import AnalysisFile, AnalysisJob, AnalysisPlanDraft
 from app.models.chat import ChatSession
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
@@ -59,6 +59,11 @@ def _ensure_postgresql_schema() -> None:
         if "chat_sessions" in tables
         else {}
     )
+    draft_columns = (
+        {column["name"]: column for column in inspector.get_columns("analysis_plan_drafts")}
+        if "analysis_plan_drafts" in tables
+        else {}
+    )
     session_fk_exists = "documents" in tables and any(
         foreign_key.get("constrained_columns") == ["session_id"]
         for foreign_key in inspector.get_foreign_keys("documents")
@@ -76,6 +81,13 @@ def _ensure_postgresql_schema() -> None:
         or not session_fk_exists
         or not scope_check_exists
         or "chat_type" not in chat_session_columns
+        or not {
+            "raw_llm_json",
+            "normalized_intent_json",
+            "normalization_actions_json",
+            "validation_errors_json",
+            "repair_attempted",
+        }.issubset(draft_columns)
     )
     if needs_upgrade:
         init_db()
@@ -114,6 +126,16 @@ def _ensure_sqlite_schema() -> None:
                 "session_id": True,
                 "result_path": True,
                 "draft_id": True,
+            },
+        ),
+        (
+            AnalysisPlanDraft.__table__,
+            {
+                "raw_llm_json": True,
+                "normalized_intent_json": True,
+                "normalization_actions_json": False,
+                "validation_errors_json": False,
+                "repair_attempted": False,
             },
         ),
     )
@@ -274,6 +296,13 @@ def _validate_schema() -> None:
             "profile_progress",
         },
         "analysis_jobs": {"workspace_id", "result_path", "draft_id"},
+        "analysis_plan_drafts": {
+            "raw_llm_json",
+            "normalized_intent_json",
+            "normalization_actions_json",
+            "validation_errors_json",
+            "repair_attempted",
+        },
     }.items():
         columns = {column["name"] for column in inspector.get_columns(table_name)}
         if not required_columns.issubset(columns):
