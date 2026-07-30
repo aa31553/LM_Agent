@@ -341,3 +341,53 @@ links existing Sessions, backfills `workspace_id`, clears legacy spreadsheet
 expiry, and changes Session foreign keys to `ON DELETE SET NULL`. The phase-three
 and phase-four migration adds dataset manifests, profiling state, plan drafts,
 artifact metadata, and result paths without removing the compatible Session APIs.
+# Analysis Recipe workflow (Phase 2–4)
+
+The deterministic analysis path now accepts a high-level `IntentDraft` and compiles it
+to the existing `AnalysisPlan`/Job lifecycle. The LLM selects only an approved dataset,
+Recipe and parameters. It does not supply derived output names, Python, SQL, JavaScript,
+server paths, or ECharts options.
+
+## Recipe APIs
+
+- `GET /api/v1/analysis/recipes`
+- `GET /api/v1/analysis/recipes/{recipe_id}?version=1.0`
+- `POST /api/v1/analysis/intents/validate`
+- `POST /api/v1/analysis/intent-drafts`
+- `GET /api/v1/analysis/intent-drafts/{draft_id}`
+- `POST /api/v1/analysis/intent-drafts/{draft_id}/confirm`
+
+The existing `/analysis/plan-drafts` routes remain compatible. Natural-language drafts
+prefer `IntentDraft`; a valid legacy `AnalysisPlan` returned by an older model still uses
+the Phase 1 normalizer and one-repair path.
+
+The first deterministic Recipe set is:
+
+- Phase 2: `histogram@1.0`
+- Phase 3: `category_summary`, `trend_summary`, `pareto`,
+  `data_quality_summary`, `group_summary`
+- Phase 4: `missing_value_summary`, `duplicate_summary`, `type_cast`,
+  `date_parts`, `derive_arithmetic`, `pivot_table`, `join_compare`
+
+Histogram accepts exactly one of `bin_width` or `bin_count`. It uses floor-aligned
+negative bins, includes a value equal to the final boundary in the final bin, limits the
+result to 200 bins, and reports null/underflow/overflow counts in `summary`.
+
+Recipe results use ResultEnvelope/Chart Schema `3.0`. Chart fields are selected from the
+validated result contract by the backend. The browser adapter supports histogram,
+category/trend/stacked charts and Pareto bar-line composition while preserving v1/v2
+bar, line and scatter behavior.
+
+## Profiling and column identity
+
+Preprocessed column profiles now include stable `column_id`, display and normalized
+names, inferred and semantic types, full-scope null/distinct statistics, numeric
+min/max/mean/quantiles, bounded samples, unit hints with their source, and parse/formula/
+format counters. Recipe column resolution uses this order:
+
+1. `column_id`
+2. `source_alias.column_name`
+3. unique display name
+4. unique normalized name
+
+Ambiguous names return `COLUMN_AMBIGUOUS`; the compiler never guesses.

@@ -43,9 +43,17 @@ from app.schemas.analysis import (
     AnalysisReportRequest,
     SpreadsheetInspectionResponse,
 )
+from app.schemas.analysis_recipe import (
+    AnalysisIntentValidateRequest,
+    AnalysisIntentValidationResponse,
+    RecipeDefinition,
+    RecipeListResponse,
+)
 from app.services.analysis_artifact_service import AnalysisArtifactService
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.analysis_orchestrator_service import AnalysisOrchestratorService
+from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
+from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
 from app.services.audit_service import AuditService
 from app.services.chat_runtime_service import chat_runtime_service
 from app.services.dataset_query_service import DatasetQueryService
@@ -59,6 +67,76 @@ from app.utils.file_utils import infer_file_type
 from app.utils.llm_usage import get_llm_token_usage, reset_llm_token_usage
 
 router = APIRouter()
+
+
+@router.get("/recipes", response_model=RecipeListResponse)
+def list_analysis_recipes(
+    _principal: Principal = Depends(get_current_principal),
+) -> RecipeListResponse:
+    return RecipeListResponse(items=AnalysisRecipeRegistry().list_enabled())
+
+
+@router.get("/recipes/{recipe_id}", response_model=RecipeDefinition)
+def get_analysis_recipe(
+    recipe_id: str,
+    version: str = Query(default="1.0", min_length=1, max_length=16),
+    _principal: Principal = Depends(get_current_principal),
+) -> RecipeDefinition:
+    return AnalysisRecipeRegistry().get(recipe_id, version)
+
+
+@router.post(
+    "/intents/validate",
+    response_model=AnalysisIntentValidationResponse,
+)
+def validate_analysis_intent(
+    payload: AnalysisIntentValidateRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisIntentValidationResponse:
+    workspace = WorkspaceService(db).get(
+        payload.workspace_id,
+        principal,
+        PermissionLevel.READ,
+    )
+    sources = [
+        AnalysisJobService(db).get_analysis_file(
+            source.file_id,
+            principal,
+            required=PermissionLevel.READ,
+        )
+        for source in payload.intent.sources
+    ]
+    if any(source.workspace_id != workspace.id for source in sources):
+        raise APIError(
+            ErrorCode.INVALID_REQUEST,
+            "All intent sources must belong to the requested workspace.",
+            400,
+        )
+    not_ready = [
+        str(source.id)
+        for source in sources
+        if source.status != AnalysisFileStatus.READY.value or not source.dataset_manifest
+    ]
+    if not_ready:
+        raise APIError(
+            ErrorCode.DOCUMENT_NOT_READY,
+            "All intent sources must finish preprocessing.",
+            409,
+            details={"file_ids": not_ready},
+        )
+    manifests = {str(source.id): source.dataset_manifest for source in sources}
+    normalized, plan, actions, warnings = AnalysisRecipeCompiler().compile(
+        payload.intent,
+        manifests,
+        allowed_file_ids=set(manifests),
+    )
+    return AnalysisIntentValidationResponse(
+        normalized_intent=normalized,
+        executable_plan=plan,
+        normalization_actions=actions,
+        warnings=warnings,
+    )
 
 
 @router.post("/files/upload", response_model=AnalysisFileUploadResponse)
@@ -439,6 +517,12 @@ def create_analysis_job(
     response_model=AnalysisPlanDraftResponse,
     status_code=http_status.HTTP_201_CREATED,
 )
+@router.post(
+    "/intent-drafts",
+    response_model=AnalysisPlanDraftResponse,
+    status_code=http_status.HTTP_201_CREATED,
+    include_in_schema=True,
+)
 async def create_analysis_plan_draft(
     payload: AnalysisPlanDraftCreate,
     principal: Principal = Depends(get_current_principal),
@@ -460,6 +544,10 @@ async def create_analysis_plan_draft(
     "/plan-drafts/{draft_id}",
     response_model=AnalysisPlanDraftResponse,
 )
+@router.get(
+    "/intent-drafts/{draft_id}",
+    response_model=AnalysisPlanDraftResponse,
+)
 def get_analysis_plan_draft(
     draft_id: UUID,
     principal: Principal = Depends(get_current_principal),
@@ -471,6 +559,11 @@ def get_analysis_plan_draft(
 
 @router.post(
     "/plan-drafts/{draft_id}/confirm",
+    response_model=AnalysisJobResponse,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
+@router.post(
+    "/intent-drafts/{draft_id}/confirm",
     response_model=AnalysisJobResponse,
     status_code=http_status.HTTP_202_ACCEPTED,
 )

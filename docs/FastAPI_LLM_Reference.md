@@ -927,3 +927,37 @@ error_handlers: app/core/exceptions.py
 permission_algorithm: app/services/permission_service.py
 runtime_schema: GET /openapi.json
 ```
+# Analysis IntentDraft contract
+
+For natural-language spreadsheet analysis, prefer the versioned Recipe contract:
+
+```json
+{
+  "schema_version": "1.0",
+  "sources": [
+    {
+      "file_id": "approved UUID",
+      "alias": "data",
+      "sheet": "Production"
+    }
+  ],
+  "recipe_id": "histogram",
+  "recipe_version": "1.0",
+  "inputs": {
+    "source_field": "Thickness",
+    "bin_width": 10
+  },
+  "filters": [],
+  "chart_enabled": true,
+  "title": "Thickness distribution"
+}
+```
+
+Only use Recipe IDs and parameters returned by
+`GET /api/v1/analysis/recipes`. Do not emit `x_field`, `y_field`, derived output
+columns, Python, SQL, JavaScript, ECharts options, or file paths. The backend compiler
+validates all file/sheet/column references, fixes only deterministic aliases and numeric
+strings, and builds the result and chart contracts after execution.
+
+When a column name is duplicated, use the supplied `column_id` or
+`source_alias.column_name`. Never guess between candidates.

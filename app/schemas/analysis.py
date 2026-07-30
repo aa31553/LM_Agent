@@ -12,9 +12,25 @@ Scalar = str | int | float | bool | date | datetime | None
 
 class SpreadsheetColumnInfo(BaseModel):
     name: str
+    column_id: str | None = None
+    display_name: str | None = None
+    normalized_name: str | None = None
     inferred_type: str
+    semantic_type: str | None = None
+    unit: str | None = None
+    profile_scope: Literal["full", "sample"] = "sample"
     sample_values: list[Scalar] = Field(default_factory=list)
     null_count_in_sample: int = 0
+    null_count: int | None = None
+    null_ratio: float | None = None
+    distinct_count: int | None = None
+    min: Scalar = None
+    max: Scalar = None
+    mean: float | None = None
+    quantiles: dict[str, float | None] = Field(default_factory=dict)
+    parse_failure_count: int = 0
+    formula_count: int = 0
+    formatted_count: int = 0
 
 
 class SpreadsheetSheetInfo(BaseModel):
@@ -185,11 +201,20 @@ class AnalysisPlan(BaseModel):
     sort: list[SortSpec] = Field(default_factory=list, max_length=5)
     limit: int = Field(default=1000, ge=1, le=5000)
     charts: list[ChartSpec] = Field(default_factory=list, max_length=5)
+    plan_origin: Literal["direct", "llm_intent", "recipe"] = "direct"
+    recipe_id: str | None = Field(default=None, max_length=64)
+    recipe_version: str | None = Field(default=None, max_length=16)
+    recipe_inputs: dict[str, Any] = Field(default_factory=dict)
+    compiler_version: str | None = Field(default=None, max_length=16)
+    result_contract: list[str] = Field(default_factory=list, max_length=100)
+    chart_enabled: bool = True
+    recipe_title: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
     def validate_output(self):
         if (
-            not self.select
+            self.recipe_id is None
+            and not self.select
             and not self.aggregations
             and self.pivot is None
             and self.correlation is None
@@ -259,6 +284,11 @@ class AnalysisJobResponse(BaseModel):
     error_message: str | None = None
     retry_of_job_id: UUID | None = None
     draft_id: UUID | None = None
+    plan_origin: str = "direct"
+    recipe_id: str | None = None
+    recipe_version: str | None = None
+    compiler_version: str | None = None
+    result_hash: str | None = None
     cancel_requested_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -301,6 +331,11 @@ class AnalysisPlanDraftResponse(BaseModel):
     question: str
     file_ids: list[UUID]
     plan: AnalysisPlan
+    raw_llm_json: dict[str, Any] | None = None
+    normalized_intent: dict[str, Any] | None = None
+    recipe_id: str | None = None
+    recipe_version: str | None = None
+    compiler_version: str | None = None
     warnings: list[str] = Field(default_factory=list)
     normalization_actions: list[AnalysisNormalizationAction] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)

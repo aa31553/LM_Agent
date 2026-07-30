@@ -64,6 +64,11 @@ def _ensure_postgresql_schema() -> None:
         if "analysis_plan_drafts" in tables
         else {}
     )
+    analysis_job_columns = (
+        {column["name"]: column for column in inspector.get_columns("analysis_jobs")}
+        if "analysis_jobs" in tables
+        else {}
+    )
     session_fk_exists = "documents" in tables and any(
         foreign_key.get("constrained_columns") == ["session_id"]
         for foreign_key in inspector.get_foreign_keys("documents")
@@ -82,11 +87,23 @@ def _ensure_postgresql_schema() -> None:
         or not scope_check_exists
         or "chat_type" not in chat_session_columns
         or not {
+            "plan_origin",
+            "recipe_id",
+            "recipe_version",
+            "compiler_version",
+            "dataset_hashes_json",
+            "result_schema_json",
+            "result_hash",
+        }.issubset(analysis_job_columns)
+        or not {
             "raw_llm_json",
             "normalized_intent_json",
             "normalization_actions_json",
             "validation_errors_json",
             "repair_attempted",
+            "recipe_id",
+            "recipe_version",
+            "compiler_version",
         }.issubset(draft_columns)
     )
     if needs_upgrade:
@@ -126,6 +143,13 @@ def _ensure_sqlite_schema() -> None:
                 "session_id": True,
                 "result_path": True,
                 "draft_id": True,
+                "plan_origin": False,
+                "recipe_id": True,
+                "recipe_version": True,
+                "compiler_version": True,
+                "dataset_hashes_json": False,
+                "result_schema_json": True,
+                "result_hash": True,
             },
         ),
         (
@@ -136,6 +160,9 @@ def _ensure_sqlite_schema() -> None:
                 "normalization_actions_json": False,
                 "validation_errors_json": False,
                 "repair_attempted": False,
+                "recipe_id": True,
+                "recipe_version": True,
+                "compiler_version": True,
             },
         ),
     )
@@ -295,13 +322,27 @@ def _validate_schema() -> None:
             "dataset_manifest",
             "profile_progress",
         },
-        "analysis_jobs": {"workspace_id", "result_path", "draft_id"},
+        "analysis_jobs": {
+            "workspace_id",
+            "result_path",
+            "draft_id",
+            "plan_origin",
+            "recipe_id",
+            "recipe_version",
+            "compiler_version",
+            "dataset_hashes_json",
+            "result_schema_json",
+            "result_hash",
+        },
         "analysis_plan_drafts": {
             "raw_llm_json",
             "normalized_intent_json",
             "normalization_actions_json",
             "validation_errors_json",
             "repair_attempted",
+            "recipe_id",
+            "recipe_version",
+            "compiler_version",
         },
     }.items():
         columns = {column["name"] for column in inspector.get_columns(table_name)}

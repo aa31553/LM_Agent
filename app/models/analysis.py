@@ -53,6 +53,13 @@ class AnalysisJob(Base):
     request_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     result_json: Mapped[dict | None] = mapped_column(JSON)
     result_path: Mapped[str | None] = mapped_column(Text)
+    plan_origin: Mapped[str] = mapped_column(String(32), nullable=False, default="direct")
+    recipe_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    recipe_version: Mapped[str | None] = mapped_column(String(16))
+    compiler_version: Mapped[str | None] = mapped_column(String(16))
+    dataset_hashes_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    result_schema_json: Mapped[dict | None] = mapped_column(JSON)
+    result_hash: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     retry_of_job_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("analysis_jobs.id", ondelete="SET NULL"),
@@ -89,6 +96,9 @@ class AnalysisPlanDraft(Base):
     normalization_actions_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     validation_errors_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     repair_attempted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    recipe_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    recipe_version: Mapped[str | None] = mapped_column(String(16))
+    compiler_version: Mapped[str | None] = mapped_column(String(16))
     warnings_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
     error_message: Mapped[str | None] = mapped_column(Text)

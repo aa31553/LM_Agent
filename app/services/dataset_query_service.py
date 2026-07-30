@@ -10,6 +10,9 @@ from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.schemas.analysis import AnalysisPlan, FilterCondition
+from app.schemas.analysis_recipe import IntentDraft
+from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
+from app.services.analysis_recipe_executor import AnalysisRecipeExecutor
 
 
 class DatasetQueryService:
@@ -20,6 +23,23 @@ class DatasetQueryService:
         plan: AnalysisPlan,
         manifests: dict[str, dict[str, Any]],
     ) -> tuple[AnalysisPlan, list[str]]:
+        if plan.recipe_id is not None:
+            intent = IntentDraft(
+                sources=plan.sources,
+                recipe_id=plan.recipe_id,
+                recipe_version=plan.recipe_version or "1.0",
+                inputs=plan.recipe_inputs,
+                filters=[item.model_dump(mode="json") for item in plan.filters],
+                chart_enabled=plan.chart_enabled,
+                title=plan.recipe_title,
+            )
+            _intent, compiled, _actions, warnings = AnalysisRecipeCompiler().compile(
+                intent,
+                manifests,
+                allowed_file_ids=set(manifests),
+                plan_origin=plan.plan_origin,
+            )
+            return compiled, warnings
         if not plan.sources:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -213,6 +233,8 @@ class DatasetQueryService:
         manifests: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
         normalized, warnings = self.validate_plan(plan, manifests)
+        if normalized.recipe_id is not None:
+            return AnalysisRecipeExecutor().execute(normalized, manifests)
         frames: dict[str, pl.LazyFrame] = {}
         source_columns: dict[str, set[str]] = {}
         for source in normalized.sources:

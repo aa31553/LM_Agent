@@ -61,6 +61,18 @@ class SpreadsheetIngestionService:
             if inspected is not None:
                 dataset["sample_rows"] = inspected.get("sample_rows", [])
                 dataset["warnings"] = inspected.get("warnings", [])
+                profiled_by_name = {
+                    column["name"]: column for column in dataset.get("columns", [])
+                }
+                inspected["columns"] = [
+                    {
+                        **column,
+                        **profiled_by_name.get(column.get("name"), {}),
+                        "formula_count": 0,
+                        "formatted_count": 0,
+                    }
+                    for column in inspected.get("columns", [])
+                ]
         manifest = {
             "schema_version": "1.0",
             "conversion_engine": "duckdb",
@@ -210,21 +222,73 @@ class SpreadsheetIngestionService:
         null_values = (
             lazy.select(pl.all().null_count()).collect().row(0, named=True) if schema else {}
         )
+        distinct_values = (
+            lazy.select(pl.all().n_unique()).collect().row(0, named=True) if schema else {}
+        )
         samples = (
             lazy.head(settings.analysis_profile_sample_rows).collect().to_dicts() if schema else []
         )
-        columns = [
-            {
+        columns = []
+        for index, (name, dtype) in enumerate(schema.items(), start=1):
+            inferred_type = self._polars_type(dtype)
+            null_count = int(null_values.get(name, 0))
+            profile = {
                 "name": name,
-                "inferred_type": self._polars_type(dtype),
+                "column_id": f"{dataset_key}:c{index:04d}",
+                "display_name": name,
+                "normalized_name": self._normalized_name(name),
+                "inferred_type": inferred_type,
                 "physical_type": str(dtype),
-                "null_count": int(null_values.get(name, 0)),
+                "semantic_type": self._semantic_type(name, inferred_type),
+                "unit": self._unit_hint(name),
+                "unit_source": "header_hint" if self._unit_hint(name) else None,
+                "profile_scope": "full",
+                "null_count": null_count,
+                "null_count_in_sample": sum(
+                    1 for row in samples if row.get(name) is None
+                ),
+                "null_ratio": null_count / row_count if row_count else 0,
+                "distinct_count": int(distinct_values.get(name, 0)),
                 "sample_values": [
-                    self._json_value(row.get(name)) for row in samples if row.get(name) is not None
+                    self._json_value(row.get(name))
+                    for row in samples
+                    if row.get(name) is not None
                 ][:5],
+                "parse_failure_count": 0,
+                "formula_count": 0,
+                "formatted_count": 0,
             }
-            for name, dtype in schema.items()
-        ]
+            if dtype.is_numeric():
+                statistics = lazy.select(
+                    pl.col(name).min().alias("min"),
+                    pl.col(name).max().alias("max"),
+                    pl.col(name).mean().alias("mean"),
+                    pl.col(name).quantile(0.25, interpolation="linear").alias("p25"),
+                    pl.col(name).quantile(0.5, interpolation="linear").alias("p50"),
+                    pl.col(name).quantile(0.75, interpolation="linear").alias("p75"),
+                ).collect().row(0, named=True)
+                profile.update(
+                    {
+                        "min": self._json_value(statistics["min"]),
+                        "max": self._json_value(statistics["max"]),
+                        "mean": self._json_value(statistics["mean"]),
+                        "quantiles": {
+                            "p25": self._json_value(statistics["p25"]),
+                            "p50": self._json_value(statistics["p50"]),
+                            "p75": self._json_value(statistics["p75"]),
+                        },
+                    }
+                )
+            else:
+                profile.update(
+                    {
+                        "min": None,
+                        "max": None,
+                        "mean": None,
+                        "quantiles": {},
+                    }
+                )
+            columns.append(profile)
         return {
             "key": dataset_key,
             "sheet": sheet_name,
@@ -236,6 +300,8 @@ class SpreadsheetIngestionService:
 
     @staticmethod
     def _polars_type(dtype: Any) -> str:
+        if dtype == pl.Null:
+            return "unknown"
         if dtype.is_integer():
             return "integer"
         if dtype.is_float() or dtype.is_decimal():
@@ -245,6 +311,45 @@ class SpreadsheetIngestionService:
         if dtype == pl.Boolean:
             return "boolean"
         return "string"
+
+    @staticmethod
+    def _normalized_name(name: str) -> str:
+        normalized = "".join(
+            character.lower() if character.isalnum() else "_"
+            for character in name.strip()
+        )
+        return "_".join(part for part in normalized.split("_") if part)
+
+    @staticmethod
+    def _semantic_type(name: str, inferred_type: str) -> str:
+        lowered = name.lower()
+        if inferred_type == "datetime" or any(
+            token in lowered for token in ("date", "time", "日期", "時間")
+        ):
+            return "datetime"
+        if any(token in lowered for token in ("status", "result", "判定", "狀態")):
+            return "status"
+        if any(token in lowered for token in ("id", "serial", "batch", "lot", "編號", "批號")):
+            return "identifier"
+        if inferred_type in {"integer", "number"}:
+            return "measurement"
+        return "category"
+
+    @staticmethod
+    def _unit_hint(name: str) -> str | None:
+        lowered = name.lower()
+        hints = {
+            "%": "%",
+            "percent": "%",
+            "yield": "%",
+            "mm": "mm",
+            "μm": "μm",
+            "um": "μm",
+            "kg": "kg",
+            "°c": "°C",
+            "temp": "°C",
+        }
+        return next((unit for token, unit in hints.items() if token in lowered), None)
 
     @staticmethod
     def _csv_value(value: Any) -> Any:

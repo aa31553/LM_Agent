@@ -6,6 +6,10 @@
 > 適用範圍：Workspace、XLSX／CSV 分析、AnalysisPlan、Python／Polars 執行器、ECharts 圖表、分析 Job 與 LLM 規劃流程  
 > 主要讀者：後續執行實作的 LLM、後端工程師、前端工程師、測試與維運人員
 
+> 實作狀態（2026-07-31）：Phase 0–1 已於功能分支完成；Phase 2–4 的
+> Recipe Registry、確定性執行、Chart Schema v3、資料處理 Recipe 與強化
+> profiling 已完成實作與回歸驗證。Phase 5–6 仍待後續版本。
+
 ## 1. 文件目的
 
 本文件將 LM Agent 目前已討論的分析工作區升級方向整理成可逐步執行、驗證及回復的完整實作計劃。

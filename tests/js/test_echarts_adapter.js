@@ -54,6 +54,26 @@ assert.throws(
   /Unsupported chart type/,
 );
 
+const pareto = adapter.toEChartsOption({
+  schema_version: "3.0",
+  semantic_type: "pareto",
+  chart_type: "composite",
+  title: "Defects",
+  fields: {
+    category: "category",
+    bar: "count",
+    line: "cumulative_ratio",
+  },
+  data: [
+    { category: "Scratch", count: 8, cumulative_ratio: 0.8 },
+    { category: "Dust", count: 2, cumulative_ratio: 1 },
+  ],
+});
+assert.equal(pareto.series[0].type, "bar");
+assert.equal(pareto.series[1].type, "line");
+assert.equal(pareto.series[1].yAxisIndex, 1);
+assert.deepEqual(pareto.xAxis.data, ["Scratch", "Dust"]);
+
 let renderedOption;
 const instance = {
   setOption(value, replace) {

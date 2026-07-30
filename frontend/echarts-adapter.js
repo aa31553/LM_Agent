@@ -10,12 +10,30 @@
   "use strict";
 
   const SUPPORTED_TYPES = new Set(["bar", "line", "scatter"]);
+  const SUPPORTED_SEMANTICS = new Set([
+    "histogram",
+    "category_bar",
+    "trend_line",
+    "stacked_bar",
+    "pareto",
+    "data_quality",
+    "missing_values",
+  ]);
 
   function assertChart(chart) {
     if (!chart || typeof chart !== "object") {
       throw new TypeError("chart must be an object");
     }
     const chartType = chart.chart_type || chart.type;
+    if (chart.schema_version === "3.0" && chart.semantic_type === "pareto") {
+      if (!chart.fields?.category || !chart.fields?.bar || !chart.fields?.line) {
+        throw new TypeError("Pareto chart fields are required");
+      }
+      if (!Array.isArray(chart.data)) {
+        throw new TypeError("chart.data must be an array");
+      }
+      return;
+    }
     if (!SUPPORTED_TYPES.has(chartType)) {
       throw new TypeError(`Unsupported chart type: ${String(chartType)}`);
     }
@@ -34,6 +52,9 @@
 
   function toEChartsOption(chart) {
     assertChart(chart);
+    if (chart.schema_version === "3.0" && chart.semantic_type === "pareto") {
+      return toParetoOption(chart);
+    }
     const chartType = chart.chart_type || chart.type;
     const xValues = chart.data.map((row) => row?.[chart.x_field]);
     const scatterHasNumericX = chartType === "scatter" && numericAxis(xValues);
@@ -106,6 +127,7 @@
       option.series = names.map((name) => ({
         name,
         type: chartType,
+        stack: chart.semantic_type === "stacked_bar" ? "total" : undefined,
         data: chart.data
           .filter((row) => String(row?.[chart.series_field] ?? "") === name)
           .map((row) => [row?.[chart.x_field], row?.[chart.y_field]]),
@@ -139,6 +161,69 @@
     return option;
   }
 
+  function toParetoOption(chart) {
+    const category = chart.fields.category;
+    const bar = chart.fields.bar;
+    const line = chart.fields.line;
+    return {
+      animation: chart.data.length <= 2000,
+      title: { text: chart.title || "Pareto", left: "center" },
+      tooltip: { trigger: "axis" },
+      legend: { top: 30, data: [bar, line] },
+      grid: {
+        left: 56,
+        right: 64,
+        top: 68,
+        bottom: chart.data.length > 30 ? 72 : 48,
+        containLabel: true,
+      },
+      xAxis: {
+        type: "category",
+        data: chart.data.map((row) => row?.[category]),
+        axisLabel: { hideOverlap: true },
+      },
+      yAxis: [
+        { type: "value", name: bar, min: 0 },
+        {
+          type: "value",
+          name: line,
+          min: 0,
+          max: 1,
+          axisLabel: { formatter: (value) => `${Math.round(value * 100)}%` },
+        },
+      ],
+      series: [
+        {
+          name: bar,
+          type: "bar",
+          data: chart.data.map((row) => row?.[bar]),
+        },
+        {
+          name: line,
+          type: "line",
+          yAxisIndex: 1,
+          showSymbol: chart.data.length <= 200,
+          data: chart.data.map((row) => row?.[line]),
+        },
+      ],
+      dataZoom:
+        chart.data.length > 30
+          ? [
+              { type: "inside", xAxisIndex: 0 },
+              { type: "slider", xAxisIndex: 0, bottom: 14 },
+            ]
+          : undefined,
+      toolbox: {
+        right: 12,
+        feature: {
+          dataView: { readOnly: true },
+          restore: {},
+          saveAsImage: {},
+        },
+      },
+    };
+  }
+
   function render(container, chart, runtime) {
     if (!container) {
       throw new TypeError("A chart container is required");
@@ -155,6 +240,7 @@
 
   return Object.freeze({
     supportedTypes: Object.freeze([...SUPPORTED_TYPES]),
+    supportedSemanticTypes: Object.freeze([...SUPPORTED_SEMANTICS]),
     toEChartsOption,
     render,
   });

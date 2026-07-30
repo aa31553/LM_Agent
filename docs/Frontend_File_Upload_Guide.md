@@ -890,3 +890,20 @@ Chart Schema，不保存或執行任意 ECharts JavaScript。
 5. 需要 Excel／CSV 分析時，已啟動 `python -m app.workers.analysis_tasks`。
 6. 前端 origin 已加入 `CORS_ALLOW_ORIGINS`。
 7. 部署環境可由 `/docs`、`/redoc` 或 `/openapi.json` 核對實際 API 版本。
+# Recipe-based analysis flow
+
+After an XLSX/CSV file reaches `ready`, the frontend can:
+
+1. Read `/api/v1/analysis/files/{file_id}/inspect` and retain each `column_id`.
+2. Read `/api/v1/analysis/recipes` to build an allow-listed Recipe selector.
+3. Validate a structured intent with `/api/v1/analysis/intents/validate`, or create a
+   natural-language draft with `/api/v1/analysis/intent-drafts`.
+4. Display the compiled plan and warnings for explicit confirmation.
+5. Confirm the draft, poll the returned Job, and pass each trusted `charts[]` item to
+   `LMAnalysisCharts.toEChartsOption`.
+
+Chart Schema v3 adds `semantic_type`. Histogram and normal summary charts continue to
+carry `x_field`/`y_field`; Pareto uses the fixed `fields.category`, `fields.bar`, and
+`fields.line` mapping. The adapter, not the API or LLM, constructs ECharts series and
+axes. Continue showing `summary.warnings`, `summary.truncated`, and chart `truncated`
+near the visualization.

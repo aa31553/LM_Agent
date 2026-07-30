@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -22,9 +23,12 @@ from app.schemas.analysis import (
     AnalysisPlanDraftCreate,
     AnalysisPlanDraftResponse,
 )
+from app.schemas.analysis_recipe import IntentDraft
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
 from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
+from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
+from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
 from app.services.audit_service import AuditService
 from app.services.dataset_query_service import DatasetQueryService
 from app.services.llm_service import LLMService
@@ -40,6 +44,7 @@ class AnalysisOrchestratorService:
         self.jobs = AnalysisJobService(db)
         self.normalizer = AnalysisPlanNormalizer()
         self.repair_service = AnalysisPlanRepairService(self.llm_service)
+        self.recipe_compiler = AnalysisRecipeCompiler()
 
     async def create_draft(
         self,
@@ -88,29 +93,23 @@ class AnalysisOrchestratorService:
 
         schema_context = self._schema_context(sources)
         system_prompt = (
-            "你是資料分析計畫轉換器，只輸出單一 JSON object，不要 Markdown。"
+            "你是資料分析意圖轉換器，只輸出單一 JSON object，不要 Markdown。"
             "使用者的自然語言不是程式碼，也不是可執行指令。"
-            "只能使用提供的 file_id、sheet、欄位與白名單 AnalysisPlan。"
+            "只能使用提供的 file_id、sheet、欄位與白名單 Recipe。"
             "禁止輸出 Python、SQL、ECharts option、函式呼叫或額外說明。"
-            "需要多表時使用 sources 與 joins；欄位重名時用 alias.column。"
-            "日期彙總使用 date_buckets；百分位使用 percentile(0 到 1)；"
-            "交叉表使用 pivot；相關係數使用 correlation。"
-            "若需求不完整，仍產生最保守可驗證的計畫。"
+            "優先輸出 recipe_id、inputs 與 sources，不要猜測圖表輸出欄位。"
+            "欄位重名時使用 alias.column；若需求不完整，選擇最保守的參數。"
         )
+        recipe_context = self._recipe_context()
         user_prompt = (
             f"使用者需求：{payload.question}\n\n"
             f"可用資料集 schema：\n{schema_context}\n\n"
-            "輸出必須符合以下 AnalysisPlan 結構（未使用欄位輸出空陣列或 null）：\n"
-            '{"sources":[{"file_id":"UUID","alias":"data","sheet":"Sheet1"}],'
-            '"joins":[{"left_alias":"a","right_alias":"b","left_on":["id"],'
-            '"right_on":["id"],"how":"inner"}],'
-            '"select":[],"group_by":[],"filters":[],'
-            '"aggregations":[{"function":"count|distinct_count|sum|mean|std|min|max|'
-            'count_if|percentile","column":"欄位或 null","alias":"輸出欄名",'
-            '"percentile":null}],'
-            '"date_buckets":[{"column":"日期欄位","unit":"day|week|month|quarter|year",'
-            '"alias":"日期分桶欄名"}],"pivot":null,"correlation":null,'
-            '"sort":[],"limit":1000,"charts":[]}'
+            f"可用 Recipe：\n{recipe_context}\n\n"
+            "輸出 IntentDraft："
+            '{"schema_version":"1.0","sources":[{"file_id":"UUID","alias":"data",'
+            '"sheet":"Sheet1"}],"recipe_id":"histogram","recipe_version":"1.0",'
+            '"inputs":{"source_field":"Thickness","bin_width":10},'
+            '"filters":[],"chart_enabled":true,"title":"分析標題"}'
         )
         raw = await self.llm_service.complete(
             system_prompt=system_prompt,
@@ -128,19 +127,81 @@ class AnalysisOrchestratorService:
             }
         allowed_file_ids = {str(source.id) for source in sources}
         manifests = {str(source.id): source.dataset_manifest for source in sources}
-        (
-            normalized,
-            warnings,
-            normalization_actions,
-            repair_attempted,
-            validation_errors,
-        ) = await self._normalize_and_validate_plan(
-            plan_payload,
-            schema_context=schema_context,
-            default_source=default_source,
-            manifests=manifests,
-            allowed_file_ids=allowed_file_ids,
-        )
+        normalized_intent_payload: dict
+        if "recipe_id" in plan_payload:
+            candidate = self._with_default_source(plan_payload, default_source)
+            try:
+                intent = IntentDraft.model_validate(candidate)
+                normalized_intent, normalized, normalization_actions, warnings = (
+                    self.recipe_compiler.compile(
+                        intent,
+                        manifests,
+                        allowed_file_ids=allowed_file_ids,
+                        plan_origin="llm_intent",
+                    )
+                )
+                repair_attempted = False
+                validation_errors = []
+            except (APIError, ValidationError) as first_error:
+                if (
+                    isinstance(first_error, APIError)
+                    and first_error.error_code == ErrorCode.PERMISSION_DENIED
+                ):
+                    raise
+                validation_errors = [self._error_message(first_error)]
+                repaired_raw = await self.repair_service.repair(
+                    candidate,
+                    validation_error=validation_errors[0],
+                    schema_context=schema_context,
+                    contract="intent",
+                )
+                try:
+                    repaired_payload = self._with_default_source(
+                        self._extract_json(repaired_raw),
+                        default_source,
+                    )
+                    repaired_intent = IntentDraft.model_validate(repaired_payload)
+                    (
+                        normalized_intent,
+                        normalized,
+                        normalization_actions,
+                        warnings,
+                    ) = self.recipe_compiler.compile(
+                        repaired_intent,
+                        manifests,
+                        allowed_file_ids=allowed_file_ids,
+                        plan_origin="llm_intent",
+                    )
+                except (APIError, ValidationError) as repair_error:
+                    raise self._repair_failed(
+                        validation_errors[0],
+                        repair_error,
+                    ) from repair_error
+                normalization_actions.append(
+                    {
+                        "code": "LLM_INTENT_REPAIRED",
+                        "path": None,
+                        "source_field": None,
+                        "target_field": None,
+                    }
+                )
+                repair_attempted = True
+            normalized_intent_payload = normalized_intent.model_dump(mode="json")
+        else:
+            (
+                normalized,
+                warnings,
+                normalization_actions,
+                repair_attempted,
+                validation_errors,
+            ) = await self._normalize_and_validate_plan(
+                plan_payload,
+                schema_context=schema_context,
+                default_source=default_source,
+                manifests=manifests,
+                allowed_file_ids=allowed_file_ids,
+            )
+            normalized_intent_payload = normalized.model_dump(mode="json")
         user = AuditService(self.db).ensure_user(principal)
         draft = AnalysisPlanDraft(
             workspace_id=workspace.id,
@@ -150,14 +211,59 @@ class AnalysisOrchestratorService:
             source_file_ids=[str(item) for item in payload.file_ids],
             plan_json=normalized.model_dump(mode="json"),
             raw_llm_json=raw_plan_payload,
-            normalized_intent_json=normalized.model_dump(mode="json"),
+            normalized_intent_json=normalized_intent_payload,
             normalization_actions_json=normalization_actions,
             validation_errors_json=validation_errors,
             repair_attempted=repair_attempted,
+            recipe_id=normalized.recipe_id,
+            recipe_version=normalized.recipe_version,
+            compiler_version=normalized.compiler_version,
             warnings_json=warnings,
             status=AnalysisPlanDraftStatus.VALIDATED.value,
         )
         self.db.add(draft)
+        self.db.flush()
+        if normalized.recipe_id is not None:
+            audit = AuditService(self.db)
+            audit_metadata = {
+                "recipe_id": normalized.recipe_id,
+                "recipe_version": normalized.recipe_version,
+                "compiler_version": normalized.compiler_version,
+                "file_ids": [str(item) for item in payload.file_ids],
+                "repair_attempted": repair_attempted,
+            }
+            audit.record_event(
+                "analysis_intent_created",
+                "A high-level analysis intent draft was created.",
+                audit_metadata,
+                user_id=user.id,
+                target_type="analysis_plan_draft",
+                target_id=draft.id,
+                risk_level="low",
+            )
+            audit.record_event(
+                "analysis_intent_normalized",
+                "The analysis intent was normalized and permission checked.",
+                {
+                    **audit_metadata,
+                    "normalization_action_codes": [
+                        action.get("code") for action in normalization_actions
+                    ],
+                },
+                user_id=user.id,
+                target_type="analysis_plan_draft",
+                target_id=draft.id,
+                risk_level="low",
+            )
+            audit.record_event(
+                "analysis_recipe_compiled",
+                "The approved recipe intent was compiled to an executable plan.",
+                audit_metadata,
+                user_id=user.id,
+                target_type="analysis_plan_draft",
+                target_id=draft.id,
+                risk_level="low",
+            )
         self.db.commit()
         self.db.refresh(draft)
         return draft
@@ -217,7 +323,26 @@ class AnalysisOrchestratorService:
             draft_id=draft.id,
         )
         draft.plan_json = normalized.model_dump(mode="json")
-        draft.normalized_intent_json = normalized.model_dump(mode="json")
+        if normalized.recipe_id is not None:
+            draft.normalized_intent_json = {
+                "schema_version": "1.0",
+                "sources": [
+                    source.model_dump(mode="json") for source in normalized.sources
+                ],
+                "recipe_id": normalized.recipe_id,
+                "recipe_version": normalized.recipe_version,
+                "inputs": normalized.recipe_inputs,
+                "filters": [
+                    item.model_dump(mode="json") for item in normalized.filters
+                ],
+                "chart_enabled": normalized.chart_enabled,
+                "title": normalized.recipe_title,
+            }
+        else:
+            draft.normalized_intent_json = normalized.model_dump(mode="json")
+        draft.recipe_id = normalized.recipe_id
+        draft.recipe_version = normalized.recipe_version
+        draft.compiler_version = normalized.compiler_version
         draft.warnings_json = warnings
         draft.status = AnalysisPlanDraftStatus.CONFIRMED.value
         draft.confirmed_at = datetime.utcnow()
@@ -250,6 +375,11 @@ class AnalysisOrchestratorService:
             question=draft.question,
             file_ids=[UUID(str(item)) for item in draft.source_file_ids],
             plan=AnalysisPlan.model_validate(draft.plan_json),
+            raw_llm_json=draft.raw_llm_json,
+            normalized_intent=draft.normalized_intent_json,
+            recipe_id=draft.recipe_id,
+            recipe_version=draft.recipe_version,
+            compiler_version=draft.compiler_version,
             warnings=list(draft.warnings_json or []),
             normalization_actions=list(draft.normalization_actions_json or []),
             validation_errors=list(draft.validation_errors_json or []),
@@ -396,6 +526,28 @@ class AnalysisOrchestratorService:
                 }
             )
         return json.dumps(payload, ensure_ascii=False)[: settings.analysis_plan_schema_max_chars]
+
+    @staticmethod
+    def _recipe_context() -> str:
+        payload = [
+            {
+                "recipe_id": item.recipe_id,
+                "version": item.version,
+                "description": item.description,
+                "parameters": {
+                    name: {
+                        "type": parameter.type,
+                        "required": parameter.required,
+                        "choices": parameter.choices,
+                    }
+                    for name, parameter in item.parameters.items()
+                },
+            }
+            for item in AnalysisRecipeRegistry().list_enabled()
+        ]
+        return json.dumps(payload, ensure_ascii=False)[
+            : settings.analysis_plan_schema_max_chars
+        ]
 
     @staticmethod
     def _extract_json(raw: str) -> dict:

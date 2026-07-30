@@ -20,9 +20,11 @@ class AnalysisPlanRepairService:
         *,
         validation_error: str,
         schema_context: str,
+        contract: str = "plan",
     ) -> str:
+        contract_name = "IntentDraft" if contract == "intent" else "AnalysisPlan"
         system_prompt = (
-            "你是 AnalysisPlan JSON 修復器，只輸出單一 JSON object，不要 Markdown。"
+            f"你是 {contract_name} JSON 修復器，只輸出單一 JSON object，不要 Markdown。"
             "只修復驗證錯誤，不得新增未提供的檔案、工作表或欄位。"
             "禁止輸出 Python、SQL、JavaScript、ECharts option、路徑或額外說明。"
             "這是唯一一次修復機會。"
@@ -33,8 +35,12 @@ class AnalysisPlanRepairService:
             "available_schema": schema_context[: settings.analysis_plan_schema_max_chars // 2],
         }
         user_prompt = (
-            "請修復下列 AnalysisPlan。保留使用者意圖，並符合目前的 "
-            "x_field/y_field 圖表契約：\n"
+            f"請修復下列 {contract_name}。保留使用者意圖；"
+            + (
+                "只選擇白名單 Recipe 與參數，不要輸出圖表欄位：\n"
+                if contract == "intent"
+                else "並符合目前的 x_field/y_field 圖表契約：\n"
+            )
             + json.dumps(repair_context, ensure_ascii=False)
         )
         return await self.llm_service.complete(

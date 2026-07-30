@@ -136,6 +136,10 @@ class AnalysisJobService:
             progress=0,
             request_json=normalized.model_dump(mode="json"),
             draft_id=draft_id,
+            plan_origin=normalized.plan_origin,
+            recipe_id=normalized.recipe_id,
+            recipe_version=normalized.recipe_version,
+            compiler_version=normalized.compiler_version,
         )
         self.db.add(job)
         self.db.flush()
@@ -376,6 +380,11 @@ class AnalysisJobService:
             error_message=job.error_message,
             retry_of_job_id=job.retry_of_job_id,
             draft_id=job.draft_id,
+            plan_origin=job.plan_origin,
+            recipe_id=job.recipe_id,
+            recipe_version=job.recipe_version,
+            compiler_version=job.compiler_version,
+            result_hash=job.result_hash,
             cancel_requested_at=job.cancel_requested_at,
             created_at=job.created_at,
             updated_at=job.updated_at,
@@ -488,6 +497,12 @@ def run_analysis_job(job_id: UUID) -> None:
             if job.status == AnalysisJobStatus.CANCELLED.value:
                 return
             job.result_json = result
+            job.dataset_hashes_json = result.get("lineage", {}).get(
+                "dataset_hashes",
+                [],
+            )
+            job.result_schema_json = result.get("schema")
+            job.result_hash = result.get("lineage", {}).get("result_hash")
             job.result_path = WorkspaceStorage().save_result(
                 job.workspace_id,
                 job.id,
@@ -496,6 +511,36 @@ def run_analysis_job(job_id: UUID) -> None:
             job.status = AnalysisJobStatus.COMPLETED.value
             job.progress = 100
             job.error_message = None
+            if plan.recipe_id is not None:
+                audit = AuditService(db)
+                metadata = {
+                    "recipe_id": plan.recipe_id,
+                    "recipe_version": plan.recipe_version,
+                    "compiler_version": plan.compiler_version,
+                    "result_hash": job.result_hash,
+                    "warning_count": len(result.get("summary", {}).get("warnings", [])),
+                }
+                audit.record_event(
+                    "analysis_result_validated",
+                    "Recipe output matched its declared result contract.",
+                    metadata,
+                    user_id=job.created_by,
+                    target_type="analysis_job",
+                    target_id=job.id,
+                    risk_level="low",
+                )
+                audit.record_event(
+                    "analysis_chart_built",
+                    "Trusted chart schemas were built from validated recipe results.",
+                    {
+                        **metadata,
+                        "chart_count": len(result.get("charts", [])),
+                    },
+                    user_id=job.created_by,
+                    target_type="analysis_job",
+                    target_id=job.id,
+                    risk_level="low",
+                )
         except ProcessWorkerCancelledError:
             db.refresh(job)
             job.status = AnalysisJobStatus.CANCELLED.value
@@ -506,6 +551,24 @@ def run_analysis_job(job_id: UUID) -> None:
                 job.status = AnalysisJobStatus.FAILED.value
                 job.progress = 100
                 job.error_message = exc.message if isinstance(exc, APIError) else str(exc)
+                if job.recipe_id is not None:
+                    AuditService(db).record_event(
+                        "analysis_recipe_failed",
+                        "A deterministic analysis recipe failed.",
+                        {
+                            "recipe_id": job.recipe_id,
+                            "recipe_version": job.recipe_version,
+                            "error_code": (
+                                str(exc.error_code)
+                                if isinstance(exc, APIError)
+                                else type(exc).__name__
+                            ),
+                        },
+                        user_id=job.created_by,
+                        target_type="analysis_job",
+                        target_id=job.id,
+                        risk_level="medium",
+                    )
         job.updated_at = datetime.utcnow()
         job.finished_at = datetime.utcnow()
         db.commit()
