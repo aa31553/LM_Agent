@@ -1,7 +1,7 @@
 # LM Agent 前端檔案上傳與分析串接指南
 
 > 適用分支：`codex/session-analysis-workspace`<br>
-> API 版本：`0.10.0`<br>
+> API 版本：`0.11.0`<br>
 > 更新日期：2026-07-30<br>
 > 執行時最終契約：`GET /openapi.json`
 
@@ -424,6 +424,7 @@ stateDiagram-v2
 ```ts
 type AnalysisFileUploadResponse = {
   file_id: string;
+  workspace_id: string;
   session_id: string;
   filename: string;
   file_type: "xlsx" | "csv";
@@ -436,10 +437,12 @@ async function uploadAnalysisFile(
   file: File,
   sessionId: string,
   token: string,
+  workspaceId?: string,
 ): Promise<AnalysisFileUploadResponse> {
   const form = new FormData();
   form.append("file", file);
   form.append("session_id", sessionId);
+  if (workspaceId) form.append("workspace_id", workspaceId);
   form.append("confidential_level", "internal");
 
   return apiJson<AnalysisFileUploadResponse>(
@@ -460,7 +463,7 @@ async function uploadAnalysisFile(
 | 回傳資料列 | 5,000 |
 | Inspect 樣本列 | 20 |
 | Job timeout | 1,800 秒 |
-| 檔案保存期限 | 168 小時 |
+| Workspace 檔案保存期限 | 預設持久保存 |
 
 ### 5.3 Inspect 工作表與欄位
 
@@ -648,17 +651,18 @@ LLM 只解釋後端已算好的 bounded result JSON，不執行 Python／SQL，�
 
 ```http
 GET    /api/v1/analysis/files?session_id={session_id}
+GET    /api/v1/analysis/files?workspace_id={workspace_id}
 DELETE /api/v1/analysis/files/{file_id}
 ```
 
-刪除分析檔會一併刪除其 Job 與本機檔案。刪除整個 Session 會同時清除 Session
-附件、分析檔、分析 Job、聊天訊息與相關本機 artifact，回覆包含
-`deleted_documents`、`deleted_analysis_files`、`deleted_messages` 與 `deleted_files`。
+刪除分析檔會一併刪除其 Job 與本機檔案。刪除 Session 只清除 Session
+附件與聊天訊息，分析檔與 Job 會解除 Session 關聯並繼續保留在 Workspace。
 
 ### 5.9 分析 Job 列表、進度、取消與重試
 
 ```http
 GET  /api/v1/analysis/jobs?session_id={session_id}&page=1&page_size=50
+GET  /api/v1/analysis/jobs?workspace_id={workspace_id}&page=1&page_size=50
 POST /api/v1/analysis/jobs/{job_id}/cancel
 POST /api/v1/analysis/jobs/{job_id}/retry
 ```

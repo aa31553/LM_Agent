@@ -1,7 +1,7 @@
-# Session Attachments and Spreadsheet Analysis Workspace
+# Session Attachments and Persistent Spreadsheet Workspace
 
 > Branch: `codex/session-analysis-workspace`<br>
-> API version: `0.10.0`<br>
+> API version: `0.11.0`<br>
 > Updated: 2026-07-30<br>
 > Frontend implementation guide:
 > [Frontend_File_Upload_Guide.md](Frontend_File_Upload_Guide.md)
@@ -16,7 +16,7 @@ questions or explains already-computed results.
 | Input | Route | Processing | LLM role |
 |---|---|---|---|
 | PDF, DOCX, PPTX, image, text | `POST /api/v1/documents/upload` with `scope=session` | Existing document worker converts to Markdown, chunks, embeds, and indexes only for the session | Answer from retrieved chunks |
-| XLSX or CSV for exact analysis | `POST /api/v1/analysis/files/upload` | Stored in `analysis_files`; no chunks or embeddings are created | Optional explanation after calculation |
+| XLSX or CSV for exact analysis | `POST /api/v1/analysis/files/upload` | Stored under a persistent Workspace; no chunks or embeddings are created | Optional explanation after calculation |
 
 Large spreadsheets must use the analysis route. They are not inserted into the
 knowledge base and are not treated as RAG documents.
@@ -59,6 +59,47 @@ uploading multiple files into a new Session must upload the first file, save the
 returned `session_id`, and use it for subsequent uploads. Parallel uploads without
 a `session_id` create separate Sessions.
 
+## Workspace ownership model
+
+`Workspace` is the persistent owner of spreadsheet files, profiles, jobs, results,
+and export artifacts. A Chat Session is only an optional interaction origin.
+
+```text
+Workspace
+├── Chat Sessions
+├── Analysis Files
+│   ├── original
+│   └── profile
+├── Analysis Jobs
+│   └── results
+└── Artifacts
+```
+
+When the compatible upload route receives only `session_id`, the backend creates
+or reuses that user's private Workspace and links the Session to it. Supplying
+`workspace_id` uploads directly into an existing Workspace after write permission
+is checked.
+
+Workspace permissions support `user`, `department`, `role`, and `project`
+subjects with `read`, `write`, or `admin` levels. File confidentiality clearance
+is checked in addition to Workspace membership.
+
+### Workspace routes
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/v1/workspaces` | Create a Workspace |
+| GET | `/api/v1/workspaces` | List accessible Workspaces |
+| GET | `/api/v1/workspaces/{workspace_id}` | Get Workspace metadata and counts |
+| PATCH | `/api/v1/workspaces/{workspace_id}` | Update Workspace metadata |
+| DELETE | `/api/v1/workspaces/{workspace_id}` | Delete the Workspace and its stored data |
+| PUT | `/api/v1/workspaces/{workspace_id}/sessions/{session_id}` | Link or move a Session |
+| DELETE | `/api/v1/workspaces/{workspace_id}/sessions/{session_id}` | Detach a Session |
+| POST | `/api/v1/workspaces/{workspace_id}/permissions` | Create or update sharing permission |
+| GET | `/api/v1/workspaces/{workspace_id}/permissions` | List sharing permissions |
+| DELETE | `/api/v1/workspaces/{workspace_id}/permissions/{permission_id}` | Remove sharing permission |
+| GET | `/api/v1/workspaces/{workspace_id}/artifacts` | List export artifact metadata |
+
 ## Spreadsheet analysis workflow
 
 1. Upload an XLSX or CSV file.
@@ -75,13 +116,15 @@ a `session_id` create separate Sessions.
 
 | Method | Route | Purpose |
 |---|---|---|
-| POST | `/api/v1/analysis/files/upload` | Stream an XLSX/CSV into session storage |
-| GET | `/api/v1/analysis/files?session_id=...` | List analysis files for a session |
+| POST | `/api/v1/analysis/files/upload` | Stream an XLSX/CSV into Workspace storage; accepts required `session_id` and optional `workspace_id` |
+| GET | `/api/v1/analysis/files?workspace_id=...` | List files directly by Workspace |
+| GET | `/api/v1/analysis/files?session_id=...` | Compatible route; resolves the Session's Workspace |
 | GET | `/api/v1/analysis/files/{file_id}/inspect` | Return workbook schema and samples |
 | DELETE | `/api/v1/analysis/files/{file_id}` | Delete file and jobs |
 | POST | `/api/v1/analysis/plans/validate` | Validate and normalize a whitelist plan |
 | POST | `/api/v1/analysis/jobs` | Queue an analysis job |
-| GET | `/api/v1/analysis/jobs?session_id=...` | List and filter paginated jobs for a session |
+| GET | `/api/v1/analysis/jobs?workspace_id=...` | List and filter paginated jobs for a Workspace |
+| GET | `/api/v1/analysis/jobs?session_id=...` | Compatible route; resolves the Session's Workspace |
 | GET | `/api/v1/analysis/jobs/{job_id}` | Return status and structured result |
 | POST | `/api/v1/analysis/jobs/{job_id}/cancel` | Cancel a queued or running job |
 | POST | `/api/v1/analysis/jobs/{job_id}/retry` | Queue a new attempt for a failed or cancelled job |
@@ -181,9 +224,47 @@ states that calculations are final, numbers must not be changed, and causal clai
 must not be invented. DLP masking and the shared LLM concurrency limiter are applied.
 No autonomous tool planning is required from the 31B model.
 
-## Retention
+## Cross-Session reuse
 
-Analysis files default to seven days (`ANALYSIS_RETENTION_HOURS=168`). The analysis
-worker removes expired files hourly, except files with a running job. Deleting a
-chat session also removes its temporary documents, analysis files, analysis jobs,
-and local artifacts.
+`AnalysisJobCreate` accepts an optional `session_id`. A Session linked to the same
+Workspace can create a new job using an existing `file_id`; the original upload is
+not copied or reparsed. Shared users may also create Workspace jobs without a
+Session when they have write permission.
+
+Deleting a Chat Session detaches `analysis_files.session_id` and
+`analysis_jobs.session_id`. It does not delete the Workspace file, result, or
+artifact. Deleting the Workspace is the explicit destructive operation.
+
+## Storage layout
+
+```text
+local_storage_root/
+└── workspaces/{workspace_id}/
+    ├── files/{file_id}/
+    │   ├── original/{filename}
+    │   ├── profile/profile.json
+    │   └── metadata.json
+    ├── jobs/{job_id}/
+    │   └── results/result.json
+    └── artifacts/{artifact_id}/{filename}
+```
+
+All path components are validated against the configured Workspace root.
+`result_json` remains in PostgreSQL for polling compatibility, while the same
+result is also persisted in the results layer.
+
+## Retention and migration
+
+New Workspace files are persistent by default (`expires_at = null`). The cleanup
+worker still removes legacy rows with an explicit expiry, except files with a
+running job. Session-scoped RAG documents retain their existing lifecycle.
+
+After deployment, run:
+
+```bash
+python -m app.db.init_db
+```
+
+The additive phase-two migration creates private Workspaces for existing users,
+links existing Sessions, backfills `workspace_id`, clears legacy spreadsheet
+expiry, and changes Session foreign keys to `ON DELETE SET NULL`.

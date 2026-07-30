@@ -1,4 +1,5 @@
 import logging
+from uuid import uuid4
 
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -6,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.base import Base
 from app.db.init_db import init_db
 from app.db.session import database_backend, engine
+from app.models.analysis import AnalysisFile, AnalysisJob
 from app.models.chat import ChatSession
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
@@ -83,22 +85,118 @@ def _ensure_sqlite_schema() -> None:
     import app.models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _backfill_sqlite_workspaces()
     inspector = inspect(engine)
     tables_to_upgrade = (
-        (Document.__table__, "knowledge_base_id", True),
-        (DocumentChunk.__table__, "knowledge_base_id", True),
-        (DocumentImage.__table__, "knowledge_base_id", True),
-        (ChatSession.__table__, "chat_type", False),
+        (Document.__table__, {"knowledge_base_id": True}),
+        (DocumentChunk.__table__, {"knowledge_base_id": True}),
+        (DocumentImage.__table__, {"knowledge_base_id": True}),
+        (
+            ChatSession.__table__,
+            {"chat_type": False, "workspace_id": True},
+        ),
+        (
+            AnalysisFile.__table__,
+            {
+                "workspace_id": False,
+                "session_id": True,
+                "profile_path": True,
+            },
+        ),
+        (
+            AnalysisJob.__table__,
+            {
+                "workspace_id": False,
+                "session_id": True,
+                "result_path": True,
+            },
+        ),
     )
-    for table, required_column, must_be_nullable in tables_to_upgrade:
+    for table, requirements in tables_to_upgrade:
         columns = {column["name"]: column for column in inspector.get_columns(table.name)}
-        needs_column = required_column not in columns
-        needs_nullable_column = (
-            must_be_nullable and not needs_column and not columns[required_column]["nullable"]
+        needs_rebuild = any(
+            column_name not in columns
+            or (
+                must_be_nullable is not None
+                and columns[column_name]["nullable"] != must_be_nullable
+            )
+            for column_name, must_be_nullable in requirements.items()
         )
-        if needs_column or needs_nullable_column:
+        if needs_rebuild:
             _rebuild_sqlite_table(table)
             inspector = inspect(engine)
+
+
+def _backfill_sqlite_workspaces() -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    required = {"users", "chat_sessions", "analysis_files", "analysis_jobs", "workspaces"}
+    if not required.issubset(tables):
+        return
+    with engine.begin() as connection:
+        columns = {
+            table_name: {column["name"] for column in inspect(connection).get_columns(table_name)}
+            for table_name in ("chat_sessions", "analysis_files", "analysis_jobs")
+        }
+        additions = {
+            "chat_sessions": (("workspace_id", "CHAR(32)"),),
+            "analysis_files": (
+                ("workspace_id", "CHAR(32)"),
+                ("profile_path", "TEXT"),
+            ),
+            "analysis_jobs": (
+                ("workspace_id", "CHAR(32)"),
+                ("result_path", "TEXT"),
+            ),
+        }
+        for table_name, table_additions in additions.items():
+            for column_name, column_type in table_additions:
+                if column_name not in columns[table_name]:
+                    connection.exec_driver_sql(
+                        f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type}'
+                    )
+        user_ids = [
+            row[0]
+            for row in connection.exec_driver_sql('SELECT DISTINCT "user_id" FROM "chat_sessions"')
+            if row[0] is not None
+        ]
+        for user_id in user_ids:
+            existing = connection.exec_driver_sql(
+                'SELECT "id" FROM "workspaces" '
+                'WHERE "owner_user_id" = ? AND "is_personal" = 1 LIMIT 1',
+                (user_id,),
+            ).first()
+            if existing is None:
+                workspace_id = uuid4().hex
+                connection.exec_driver_sql(
+                    'INSERT INTO "workspaces" ('
+                    '"id", "owner_user_id", "name", "visibility", '
+                    '"is_personal", "is_active", "created_at", "updated_at"'
+                    ") VALUES (?, ?, ?, 'private', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                    (workspace_id, user_id, "Personal Workspace"),
+                )
+            else:
+                workspace_id = existing[0]
+            connection.exec_driver_sql(
+                'UPDATE "chat_sessions" SET "workspace_id" = ? '
+                'WHERE "user_id" = ? AND "workspace_id" IS NULL',
+                (workspace_id, user_id),
+            )
+        connection.exec_driver_sql(
+            'UPDATE "analysis_files" SET "workspace_id" = ('
+            'SELECT "workspace_id" FROM "chat_sessions" '
+            'WHERE "chat_sessions"."id" = "analysis_files"."session_id"'
+            ') WHERE "workspace_id" IS NULL'
+        )
+        connection.exec_driver_sql(
+            'UPDATE "analysis_files" SET "expires_at" = NULL WHERE "workspace_id" IS NOT NULL'
+        )
+        connection.exec_driver_sql(
+            'UPDATE "analysis_jobs" SET "workspace_id" = ('
+            'SELECT "workspace_id" FROM "analysis_files" '
+            'WHERE "analysis_files"."id" = "analysis_jobs"."file_id"'
+            ') WHERE "workspace_id" IS NULL'
+        )
 
 
 def _rebuild_sqlite_table(table) -> None:
@@ -114,15 +212,14 @@ def _rebuild_sqlite_table(table) -> None:
                 }
                 for index in inspect(connection).get_indexes(table.name):
                     connection.exec_driver_sql(f'DROP INDEX IF EXISTS "{index["name"]}"')
-                connection.exec_driver_sql(
-                    f'ALTER TABLE "{table.name}" RENAME TO "{old_name}"'
-                )
+                connection.exec_driver_sql(f'ALTER TABLE "{table.name}" RENAME TO "{old_name}"')
                 table.create(bind=connection)
-                common_columns = [column.name for column in table.columns if column.name in old_columns]
+                common_columns = [
+                    column.name for column in table.columns if column.name in old_columns
+                ]
                 quoted = ", ".join(f'"{name}"' for name in common_columns)
                 connection.exec_driver_sql(
-                    f'INSERT INTO "{table.name}" ({quoted}) '
-                    f'SELECT {quoted} FROM "{old_name}"'
+                    f'INSERT INTO "{table.name}" ({quoted}) SELECT {quoted} FROM "{old_name}"'
                 )
                 connection.exec_driver_sql(f'DROP TABLE "{old_name}"')
         finally:
@@ -144,10 +241,31 @@ def _validate_schema() -> None:
     }
     document_columns = set(document_column_details)
     if "session_id" not in document_columns:
-        raise RuntimeError("Database schema initialization failed; documents.session_id is missing.")
+        raise RuntimeError(
+            "Database schema initialization failed; documents.session_id is missing."
+        )
     chat_session_columns = {column["name"] for column in inspector.get_columns("chat_sessions")}
     if "chat_type" not in chat_session_columns:
-        raise RuntimeError("Database schema initialization failed; chat_sessions.chat_type is missing.")
+        raise RuntimeError(
+            "Database schema initialization failed; chat_sessions.chat_type is missing."
+        )
+    if "workspace_id" not in chat_session_columns:
+        raise RuntimeError(
+            "Database schema initialization failed; chat_sessions.workspace_id is missing."
+        )
+    workspace_columns = {column["name"] for column in inspector.get_columns("workspaces")}
+    if not {"owner_user_id", "visibility", "is_personal"}.issubset(workspace_columns):
+        raise RuntimeError("Database schema initialization failed; workspace columns are missing.")
+    for table_name, required_columns in {
+        "analysis_files": {"workspace_id", "profile_path"},
+        "analysis_jobs": {"workspace_id", "result_path"},
+    }.items():
+        columns = {column["name"] for column in inspector.get_columns(table_name)}
+        if not required_columns.issubset(columns):
+            raise RuntimeError(
+                "Database schema initialization failed; "
+                f"{table_name} workspace columns are missing."
+            )
     nullable_targets = {
         "documents": document_column_details,
         "document_chunks": {
@@ -164,6 +282,5 @@ def _validate_schema() -> None:
     ]
     if invalid:
         raise RuntimeError(
-            "Database schema initialization failed; columns must be nullable: "
-            + ", ".join(invalid)
+            "Database schema initialization failed; columns must be nullable: " + ", ".join(invalid)
         )

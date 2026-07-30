@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.10.0"
+    app_version: str = "0.11.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [

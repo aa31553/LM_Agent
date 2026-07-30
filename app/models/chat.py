@@ -12,6 +12,10 @@ class ChatSession(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    workspace_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
+        index=True,
+    )
     title: Mapped[str | None] = mapped_column(Text)
     chat_type: Mapped[str] = mapped_column(String(32), nullable=False, default="general")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

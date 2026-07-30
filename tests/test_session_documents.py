@@ -155,6 +155,7 @@ def test_delete_session_removes_documents_jobs_and_files(session_document_client
     assert response.json() == {
         "session_id": uploaded["session_id"],
         "deleted_documents": 1,
+        "deleted_analysis_files": 0,
         "deleted_messages": 0,
         "deleted_files": 1,
         "status": "deleted",

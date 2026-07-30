@@ -1,7 +1,7 @@
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -44,28 +44,10 @@ class SessionService:
                 403,
             )
 
-        documents = list(
-            self.db.scalars(
-                select(Document).where(Document.session_id == session_id)
-            )
-        )
-        analysis_files = list(
-            self.db.scalars(
-                select(AnalysisFile).where(AnalysisFile.session_id == session_id)
-            )
-        )
-        analysis_jobs = list(
-            self.db.scalars(
-                select(AnalysisJob).where(AnalysisJob.session_id == session_id)
-            )
-        )
+        documents = list(self.db.scalars(select(Document).where(Document.session_id == session_id)))
         document_ids = [document.id for document in documents]
-        analysis_file_ids = [source.id for source in analysis_files]
-        analysis_job_ids = [job.id for job in analysis_jobs]
         message_ids = list(
-            self.db.scalars(
-                select(ChatMessage.id).where(ChatMessage.session_id == session_id)
-            )
+            self.db.scalars(select(ChatMessage.id).where(ChatMessage.session_id == session_id))
         )
         image_paths = (
             list(
@@ -83,20 +65,12 @@ class SessionService:
             for document in documents
             for path in (document.file_path, document.markdown_path)
             if path
-        ] + image_paths + [
-            source.file_path for source in analysis_files if source.file_path
-        ]
+        ] + image_paths
 
         if message_ids:
-            self.db.execute(
-                delete(RetrievalLog).where(RetrievalLog.message_id.in_(message_ids))
-            )
-            self.db.execute(
-                delete(LLMCallLog).where(LLMCallLog.message_id.in_(message_ids))
-            )
-            self.db.execute(
-                delete(MaskingEvent).where(MaskingEvent.message_id.in_(message_ids))
-            )
+            self.db.execute(delete(RetrievalLog).where(RetrievalLog.message_id.in_(message_ids)))
+            self.db.execute(delete(LLMCallLog).where(LLMCallLog.message_id.in_(message_ids)))
+            self.db.execute(delete(MaskingEvent).where(MaskingEvent.message_id.in_(message_ids)))
         if document_ids:
             self.db.execute(
                 delete(AuditEvent).where(
@@ -110,43 +84,23 @@ class SessionService:
                 )
             )
             self.db.execute(
-                delete(DocumentPermission).where(
-                    DocumentPermission.document_id.in_(document_ids)
-                )
+                delete(DocumentPermission).where(DocumentPermission.document_id.in_(document_ids))
             )
             self.db.execute(
-                delete(DocumentImage).where(
-                    DocumentImage.document_id.in_(document_ids)
-                )
+                delete(DocumentImage).where(DocumentImage.document_id.in_(document_ids))
             )
             self.db.execute(
-                delete(DocumentChunk).where(
-                    DocumentChunk.document_id.in_(document_ids)
-                )
+                delete(DocumentChunk).where(DocumentChunk.document_id.in_(document_ids))
             )
-            self.db.execute(
-                delete(Document).where(Document.id.in_(document_ids))
-            )
-        if analysis_job_ids:
-            self.db.execute(
-                delete(AuditEvent).where(
-                    AuditEvent.target_type == "analysis_job",
-                    AuditEvent.target_id.in_(analysis_job_ids),
-                )
-            )
-            self.db.execute(
-                delete(AnalysisJob).where(AnalysisJob.id.in_(analysis_job_ids))
-            )
-        if analysis_file_ids:
-            self.db.execute(
-                delete(AuditEvent).where(
-                    AuditEvent.target_type == "analysis_file",
-                    AuditEvent.target_id.in_(analysis_file_ids),
-                )
-            )
-            self.db.execute(
-                delete(AnalysisFile).where(AnalysisFile.id.in_(analysis_file_ids))
-            )
+            self.db.execute(delete(Document).where(Document.id.in_(document_ids)))
+        self.db.execute(
+            update(AnalysisJob).where(AnalysisJob.session_id == session_id).values(session_id=None)
+        )
+        self.db.execute(
+            update(AnalysisFile)
+            .where(AnalysisFile.session_id == session_id)
+            .values(session_id=None)
+        )
         if message_ids:
             self.db.execute(
                 delete(AuditEvent).where(
@@ -154,9 +108,7 @@ class SessionService:
                     AuditEvent.target_id.in_(message_ids),
                 )
             )
-            self.db.execute(
-                delete(ChatMessage).where(ChatMessage.id.in_(message_ids))
-            )
+            self.db.execute(delete(ChatMessage).where(ChatMessage.id.in_(message_ids)))
         self.db.execute(
             delete(AuditEvent).where(
                 AuditEvent.target_type == "chat_session",
@@ -166,13 +118,11 @@ class SessionService:
         self.db.delete(chat_session)
         self.db.commit()
 
-        deleted_files = sum(
-            self._delete_artifact(path) for path in artifact_paths
-        )
+        deleted_files = sum(self._delete_artifact(path) for path in artifact_paths)
         return ChatSessionDeleteResponse(
             session_id=session_id,
             deleted_documents=len(document_ids),
-            deleted_analysis_files=len(analysis_file_ids),
+            deleted_analysis_files=0,
             deleted_messages=len(message_ids),
             deleted_files=deleted_files,
         )

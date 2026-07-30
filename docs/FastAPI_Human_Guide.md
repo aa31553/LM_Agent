@@ -1,7 +1,7 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/session-analysis-workspace`<br>
-> API 版本：`0.10.0`<br>
+> API 版本：`0.11.0`<br>
 > 更新日期：2026-07-30
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。前端檔案流程與
@@ -191,8 +191,8 @@ DELETE /api/v1/chat/sessions/{session_id}/attachments/{document_id}
 }
 ```
 
-刪除 Session 會連同該 Session 的訊息、暫存文件、分析檔、分析 Job、切片與本機
-artifact 一起刪除，且不可復原：
+刪除 Session 會刪除該 Session 的訊息、暫存 RAG 文件與切片。Workspace 內的
+分析檔、分析 Job、結果與 artifact 只會解除 Session 關聯，不會被連帶刪除：
 
 ```http
 DELETE /api/v1/chat/sessions/{session_id}
@@ -203,16 +203,18 @@ DELETE /api/v1/chat/sessions/{session_id}
 大型試算表若要提取欄位、篩選、分組、統計並產生前端圖表資料，使用 Analysis API，
 不要把它當成 RAG 文件：
 
-1. `POST /api/v1/analysis/files/upload`
-2. `GET /api/v1/analysis/files/{file_id}/inspect`
-3. `POST /api/v1/analysis/plans/validate`
-4. `POST /api/v1/analysis/jobs`
-5. `GET /api/v1/analysis/jobs/{job_id}` 輪詢至 `completed` 或 `failed`
-6. 直接渲染 `result.table` 與 `result.charts`
-7. 可選擇呼叫 `POST /api/v1/analysis/jobs/{job_id}/explain`
+1. 建立或選擇 `Workspace`，或讓舊上傳流程自動使用私人 Workspace
+2. `POST /api/v1/analysis/files/upload`
+3. `GET /api/v1/analysis/files/{file_id}/inspect`
+4. `POST /api/v1/analysis/plans/validate`
+5. `POST /api/v1/analysis/jobs`
+6. `GET /api/v1/analysis/jobs/{job_id}` 輪詢至 `completed` 或 `failed`
+7. 直接渲染 `result.table` 與 `result.charts`
+8. 可選擇呼叫 `POST /api/v1/analysis/jobs/{job_id}/explain`
 
 分析檔不會建立 chunk 或 Embedding，也不會進入知識庫。後端只執行白名單
 `AnalysisPlan`，不執行 LLM 產生的 Python 或 SQL；31B LLM 僅負責解釋已完成的結果。
+同一 Workspace 的不同 Session 可重複使用同一個 `file_id`，不需重新上傳。
 完整請求、回應與 TypeScript 範例請見
 [前端檔案上傳與分析串接指南](Frontend_File_Upload_Guide.md)。
 

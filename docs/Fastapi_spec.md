@@ -9,7 +9,7 @@
 
 # 文件二：FastAPI API 規格書
 
-> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.10.0`；
+> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.11.0`；
 > 更新日期：2026-07-30。
 >
 > LLM / agent 讀取入口：本文件描述語意與生命週期；執行時的機器可讀 schema 為
@@ -645,6 +645,7 @@ Authorization: Bearer <token>
 
 刪除範圍包含該 Session 的聊天訊息、retrieval/LLM/masking 紀錄、處理工作、
 Session 文件、切片、圖片、原始檔與 Markdown。知識庫文件不受影響。操作不可復原。
+Workspace 內的分析檔與 Job 只會解除 Session 關聯，不會被連帶刪除。
 
 Response:
 
@@ -652,7 +653,7 @@ Response:
 {
   "session_id": "2ecaed2e-49e5-4b95-b14c-438ef177b233",
   "deleted_documents": 1,
-  "deleted_analysis_files": 1,
+  "deleted_analysis_files": 0,
   "deleted_messages": 4,
   "deleted_files": 3,
   "status": "deleted"
@@ -665,7 +666,8 @@ Response:
 
 ## 8. Analysis API
 
-Analysis API 專門處理不進入知識庫的 `.xlsx`／`.csv` 精確分析。它不建立文件
+Analysis API 專門處理不進入知識庫的 `.xlsx`／`.csv` 精確分析。資料以 Workspace
+為持久主要歸屬，Chat Session 僅記錄操作來源。它不建立文件
 chunk 或 Embedding；後端依白名單 `AnalysisPlan` 執行確定性計算，LLM 僅能選擇性
 解釋已完成的結果。
 
@@ -673,13 +675,14 @@ chunk 或 Embedding；後端依白名單 `AnalysisPlan` 執行確定性計算，
 
 | 步驟 | Method | Route | 說明 |
 | --- | --- | --- | --- |
-| 1 | POST | `/api/v1/analysis/files/upload` | multipart 上傳；`session_id` 必填 |
+| 1 | POST | `/api/v1/analysis/files/upload` | multipart 上傳；`session_id` 必填，`workspace_id` 可選 |
 | 2 | GET | `/api/v1/analysis/files/{file_id}/inspect` | 取得 sheet、欄位、型別與樣本 |
 | 3 | POST | `/api/v1/analysis/plans/validate` | 驗證並正規化計畫 |
 | 4 | POST | `/api/v1/analysis/jobs` | 建立 Job，HTTP 202 |
 | 5 | GET | `/api/v1/analysis/jobs/{job_id}` | 輪詢 `queued/running/completed/failed` |
 | 6 | POST | `/api/v1/analysis/jobs/{job_id}/explain` | 完成後可選擇由 LLM 解說 |
-| 管理 | GET | `/api/v1/analysis/files?session_id=...` | 列出 Session 分析檔 |
+| 管理 | GET | `/api/v1/analysis/files?workspace_id=...` | 列出 Workspace 分析檔 |
+| 相容 | GET | `/api/v1/analysis/files?session_id=...` | 解析 Session 所連結的 Workspace |
 | 管理 | DELETE | `/api/v1/analysis/files/{file_id}` | 刪除檔案及其 Jobs |
 
 分析 Worker 必須獨立啟動：
@@ -699,6 +702,7 @@ Content-Type: multipart/form-data
 | --- | --- | --- | --- |
 | `file` | binary | 是 | 只接受 `.xlsx`、`.csv` |
 | `session_id` | UUID | 是 | Session 擁有者或 admin |
+| `workspace_id` | UUID | 否 | 省略時自動使用私人 Workspace |
 | `confidential_level` | enum | 否 | 預設 `internal` |
 
 Response：
@@ -706,12 +710,13 @@ Response：
 ```json
 {
   "file_id": "<FILE_UUID>",
+  "workspace_id": "<WORKSPACE_UUID>",
   "session_id": "<SESSION_UUID>",
   "filename": "production.xlsx",
   "file_type": "xlsx",
   "size_bytes": 182400,
   "status": "ready",
-  "expires_at": "2026-08-06T10:00:00"
+  "expires_at": null
 }
 ```
 
@@ -753,8 +758,7 @@ Response：
 - filter operator：`eq/ne/gt/gte/lt/lte/contains/in/is_null/not_null`。
 - aggregation：`count/sum/mean/std/min/max/count_if`。
 - chart：`bar/line/scatter`。
-- aggregation alias 必須唯一，且不得與 `group_by` 欄名相同。API 0.10.0 尚未完整
-  阻擋碰撞，前端必須先驗證。
+- aggregation alias 必須唯一，且不得與 `group_by` 欄名相同；後端會完整驗證。
 - 無 aggregation 時不支援 raw-row sort。
 
 ### 8.4 結果

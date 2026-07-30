@@ -6,7 +6,12 @@ from sqlalchemy import delete, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import AnalysisJobStatus, ErrorCode
+from app.core.constants import (
+    AnalysisJobStatus,
+    ConfidentialLevel,
+    ErrorCode,
+    PermissionLevel,
+)
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.db.session import SessionLocal
@@ -16,11 +21,13 @@ from app.schemas.analysis import AnalysisJobCreate, AnalysisJobResponse, Analysi
 from app.services.audit_service import AuditService
 from app.services.llm_service import LLMService
 from app.services.masking_service import MaskingService
+from app.services.permission_service import PermissionService
 from app.services.spreadsheet_analysis_service import (
     SpreadsheetAnalysisService,
     execute_spreadsheet_analysis,
 )
-from app.storage.local_storage import LocalStorage
+from app.services.workspace_service import WorkspaceService
+from app.storage.workspace_storage import WorkspaceStorage
 from app.workers.process_runner import (
     ProcessWorkerCancelledError,
     run_in_process,
@@ -33,15 +40,35 @@ class AnalysisJobService:
         self.spreadsheet_service = SpreadsheetAnalysisService()
 
     def create(self, payload: AnalysisJobCreate, principal: Principal) -> AnalysisJob:
-        source = self.get_analysis_file(payload.file_id, principal)
+        source = self.get_analysis_file(
+            payload.file_id,
+            principal,
+            required=PermissionLevel.WRITE,
+        )
         normalized, _warnings = self.spreadsheet_service.validate_plan(
             source.file_path,
             source.file_type,
             payload.plan,
         )
         user = AuditService(self.db).ensure_user(principal)
+        session_id = payload.session_id
+        if session_id is None and source.session_id is not None:
+            source_session = self.db.get(ChatSession, source.session_id)
+            if source_session is not None and (
+                source_session.user_id == user.id or "admin" in principal.roles
+            ):
+                session_id = source.session_id
+        if payload.session_id is not None:
+            session = self._ensure_session_access(session_id, principal)
+            if session.workspace_id != source.workspace_id:
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    "The selected file and chat session belong to different workspaces.",
+                    400,
+                )
         job = AnalysisJob(
-            session_id=source.session_id,
+            workspace_id=source.workspace_id,
+            session_id=session_id,
             file_id=source.id,
             created_by=user.id,
             status=AnalysisJobStatus.QUEUED.value,
@@ -81,7 +108,13 @@ class AnalysisJobService:
         self.db.refresh(job)
         return job
 
-    def get(self, job_id: UUID, principal: Principal) -> AnalysisJob:
+    def get(
+        self,
+        job_id: UUID,
+        principal: Principal,
+        *,
+        required: PermissionLevel = PermissionLevel.READ,
+    ) -> AnalysisJob:
         job = self.db.get(AnalysisJob, job_id)
         if job is None:
             raise APIError(
@@ -89,37 +122,50 @@ class AnalysisJobService:
                 "Analysis job not found.",
                 404,
             )
-        self.get_analysis_file(job.file_id, principal)
+        self.get_analysis_file(job.file_id, principal, required=required)
         return job
 
     def list_jobs(
         self,
-        session_id: UUID,
         principal: Principal,
         *,
+        session_id: UUID | None = None,
+        workspace_id: UUID | None = None,
         file_id: UUID | None = None,
         status: AnalysisJobStatus | None = None,
         page: int = 1,
         page_size: int = 50,
-    ) -> tuple[list[AnalysisJob], int]:
-        self._ensure_session_access(session_id, principal)
-        filters = [AnalysisJob.session_id == session_id]
+    ) -> tuple[list[AnalysisJob], int, UUID]:
+        if session_id is None and workspace_id is None:
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "session_id or workspace_id is required.",
+                400,
+            )
+        workspace_service = WorkspaceService(self.db)
+        if session_id is not None:
+            session = self._ensure_session_access(session_id, principal)
+            workspace = workspace_service.resolve_for_session(
+                session,
+                principal,
+                workspace_id,
+                required=PermissionLevel.READ,
+            )
+        else:
+            workspace = workspace_service.get(workspace_id, principal)
+        filters = [AnalysisJob.workspace_id == workspace.id]
         if file_id is not None:
             source = self.get_analysis_file(file_id, principal)
-            if source.session_id != session_id:
+            if source.workspace_id != workspace.id:
                 raise APIError(
                     ErrorCode.INVALID_REQUEST,
-                    "Analysis file does not belong to the requested session.",
+                    "Analysis file does not belong to the requested workspace.",
                     400,
                 )
             filters.append(AnalysisJob.file_id == file_id)
         if status is not None:
             filters.append(AnalysisJob.status == status.value)
-        total = self.db.scalar(
-            select(func.count())
-            .select_from(AnalysisJob)
-            .where(*filters)
-        ) or 0
+        total = self.db.scalar(select(func.count()).select_from(AnalysisJob).where(*filters)) or 0
         items = list(
             self.db.scalars(
                 select(AnalysisJob)
@@ -129,10 +175,10 @@ class AnalysisJobService:
                 .limit(page_size)
             )
         )
-        return items, total
+        return items, total, workspace.id
 
     def cancel(self, job_id: UUID, principal: Principal) -> AnalysisJob:
-        job = self.get(job_id, principal)
+        job = self.get(job_id, principal, required=PermissionLevel.WRITE)
         if job.status == AnalysisJobStatus.CANCELLED.value:
             return job
         if job.status in {
@@ -164,7 +210,11 @@ class AnalysisJobService:
         return job
 
     def retry(self, job_id: UUID, principal: Principal) -> AnalysisJob:
-        original = self.get(job_id, principal)
+        original = self.get(
+            job_id,
+            principal,
+            required=PermissionLevel.WRITE,
+        )
         if original.status not in {
             AnalysisJobStatus.FAILED.value,
             AnalysisJobStatus.CANCELLED.value,
@@ -177,6 +227,7 @@ class AnalysisJobService:
         retry_job = self.create(
             AnalysisJobCreate(
                 file_id=original.file_id,
+                session_id=original.session_id,
                 plan=AnalysisPlan.model_validate(original.request_json),
             ),
             principal,
@@ -191,6 +242,8 @@ class AnalysisJobService:
         self,
         file_id: UUID,
         principal: Principal,
+        *,
+        required: PermissionLevel = PermissionLevel.READ,
     ) -> AnalysisFile:
         source = self.db.get(AnalysisFile, file_id)
         if source is None:
@@ -200,32 +253,30 @@ class AnalysisJobService:
                 404,
             )
         if source.expires_at is not None and source.expires_at <= datetime.utcnow():
-            file_path = source.file_path
-            self.db.execute(
-                delete(AnalysisJob).where(AnalysisJob.file_id == source.id)
+            job_ids = list(
+                self.db.scalars(select(AnalysisJob.id).where(AnalysisJob.file_id == source.id))
             )
+            self.db.execute(delete(AnalysisJob).where(AnalysisJob.file_id == source.id))
             self.db.delete(source)
             self.db.commit()
-            LocalStorage().delete_artifact(file_path)
+            storage = WorkspaceStorage()
+            for job_id in job_ids:
+                storage.delete_job_tree(source.workspace_id, job_id)
+            storage.delete_file_tree(source.workspace_id, source.id)
             raise APIError(
                 ErrorCode.ANALYSIS_NOT_FOUND,
                 "Analysis file has expired.",
                 410,
             )
-        session = self.db.get(ChatSession, source.session_id)
-        user = AuditService(self.db).ensure_user(principal)
-        if session is None:
-            raise APIError(
-                ErrorCode.ANALYSIS_NOT_FOUND,
-                "Analysis session not found.",
-                404,
-            )
-        if session.user_id != user.id and "admin" not in principal.roles:
-            raise APIError(
-                ErrorCode.PERMISSION_DENIED,
-                "User does not have permission to access this analysis file.",
-                403,
-            )
+        WorkspaceService(self.db).get(
+            source.workspace_id,
+            principal,
+            required,
+        )
+        PermissionService(self.db).ensure_level_access(
+            principal,
+            ConfidentialLevel(source.confidential_level),
+        )
         return source
 
     def _ensure_session_access(
@@ -252,6 +303,7 @@ class AnalysisJobService:
     def response(self, job: AnalysisJob) -> AnalysisJobResponse:
         return AnalysisJobResponse(
             job_id=job.id,
+            workspace_id=job.workspace_id,
             session_id=job.session_id,
             file_id=job.file_id,
             status=AnalysisJobStatus(job.status),
@@ -267,10 +319,7 @@ class AnalysisJobService:
         )
 
     async def explain(self, job: AnalysisJob) -> str:
-        if (
-            job.status != AnalysisJobStatus.COMPLETED.value
-            or job.result_json is None
-        ):
+        if job.status != AnalysisJobStatus.COMPLETED.value or job.result_json is None:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
                 "Only completed analysis jobs can be explained.",
@@ -345,6 +394,11 @@ def run_analysis_job(job_id: UUID) -> None:
             if job.status == AnalysisJobStatus.CANCELLED.value:
                 return
             job.result_json = result
+            job.result_path = WorkspaceStorage().save_result(
+                job.workspace_id,
+                job.id,
+                result,
+            )
             job.status = AnalysisJobStatus.COMPLETED.value
             job.progress = 100
             job.error_message = None
@@ -357,9 +411,7 @@ def run_analysis_job(job_id: UUID) -> None:
             if job.status != AnalysisJobStatus.CANCELLED.value:
                 job.status = AnalysisJobStatus.FAILED.value
                 job.progress = 100
-                job.error_message = (
-                    exc.message if isinstance(exc, APIError) else str(exc)
-                )
+                job.error_message = exc.message if isinstance(exc, APIError) else str(exc)
         job.updated_at = datetime.utcnow()
         job.finished_at = datetime.utcnow()
         db.commit()
@@ -367,9 +419,7 @@ def run_analysis_job(job_id: UUID) -> None:
 
 def _analysis_job_cancelled(job_id: UUID) -> bool:
     with SessionLocal() as db:
-        status = db.scalar(
-            select(AnalysisJob.status).where(AnalysisJob.id == job_id)
-        )
+        status = db.scalar(select(AnalysisJob.status).where(AnalysisJob.id == job_id))
     return status is None or status == AnalysisJobStatus.CANCELLED.value
 
 
@@ -394,15 +444,20 @@ def cleanup_expired_analysis_files() -> int:
         if not sources:
             return 0
         file_ids = [source.id for source in sources]
-        paths = [source.file_path for source in sources]
-        db.execute(
-            delete(AnalysisJob).where(AnalysisJob.file_id.in_(file_ids))
+        workspace_file_ids = [(source.workspace_id, source.id) for source in sources]
+        workspace_job_ids = list(
+            db.execute(
+                select(AnalysisJob.workspace_id, AnalysisJob.id).where(
+                    AnalysisJob.file_id.in_(file_ids)
+                )
+            )
         )
-        db.execute(
-            delete(AnalysisFile).where(AnalysisFile.id.in_(file_ids))
-        )
+        db.execute(delete(AnalysisJob).where(AnalysisJob.file_id.in_(file_ids)))
+        db.execute(delete(AnalysisFile).where(AnalysisFile.id.in_(file_ids)))
         db.commit()
-    storage = LocalStorage()
-    for path in paths:
-        storage.delete_artifact(path)
-    return len(paths)
+    storage = WorkspaceStorage()
+    for workspace_id, job_id in workspace_job_ids:
+        storage.delete_job_tree(workspace_id, job_id)
+    for workspace_id, file_id in workspace_file_ids:
+        storage.delete_file_tree(workspace_id, file_id)
+    return len(workspace_file_ids)

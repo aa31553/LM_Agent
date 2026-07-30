@@ -12,6 +12,7 @@ from app.api.v1 import (
     llmwiki,
     permissions,
     skills,
+    workspaces,
 )
 
 api_router = APIRouter()
@@ -20,6 +21,11 @@ api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(code_chat.router, prefix="/code-chat", tags=["code-chat"])
 api_router.include_router(documents.router, prefix="/documents", tags=["documents"])
 api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
+api_router.include_router(
+    workspaces.router,
+    prefix="/workspaces",
+    tags=["workspaces"],
+)
 api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
 api_router.include_router(
     knowledge_bases.router,

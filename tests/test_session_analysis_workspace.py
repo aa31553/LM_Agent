@@ -16,6 +16,7 @@ from app.models.analysis import AnalysisFile, AnalysisJob
 from app.models.audit import AuditEvent
 from app.models.chat import ChatSession
 from app.models.user import User
+from app.models.workspace import Workspace
 from app.schemas.analysis import (
     AggregationSpec,
     AnalysisJobCreate,
@@ -121,9 +122,7 @@ def test_csv_cp950_inspection_and_column_extraction(tmp_path: Path) -> None:
 
     plan = AnalysisPlan(
         select=["機台", "良率"],
-        filters=[
-            FilterCondition(column="良率", operator="lt", value=95)
-        ],
+        filters=[FilterCondition(column="良率", operator="lt", value=95)],
     )
     result = service.execute(str(path), "csv", plan)
     assert result["table"]["rows"] == [{"機台": "B", "良率": "91.0"}]
@@ -197,9 +196,7 @@ def test_aggregation_aliases_are_unique_and_do_not_shadow_group_columns() -> Non
 def test_non_null_filter_operators_require_a_value() -> None:
     with pytest.raises(ValidationError, match="value is required"):
         FilterCondition(column="Yield", operator="lt")
-    assert (
-        FilterCondition(column="Yield", operator="is_null").value is None
-    )
+    assert FilterCondition(column="Yield", operator="is_null").value is None
 
 
 def test_raw_result_reports_total_matches_when_rows_are_truncated(
@@ -252,6 +249,7 @@ def test_analysis_job_list_cancel_and_retry(tmp_path: Path) -> None:
     engine = create_engine("sqlite:///:memory:")
     for table in (
         User.__table__,
+        Workspace.__table__,
         ChatSession.__table__,
         AnalysisFile.__table__,
         AnalysisJob.__table__,
@@ -276,9 +274,18 @@ def test_analysis_job_list_cancel_and_retry(tmp_path: Path) -> None:
         db.add(user)
         db.flush()
         chat_session = ChatSession(user_id=user.id, chat_type="general")
+        workspace = Workspace(
+            owner_user_id=user.id,
+            name="Analysis workspace",
+            is_personal=True,
+        )
+        db.add(workspace)
+        db.flush()
+        chat_session.workspace_id = workspace.id
         db.add(chat_session)
         db.flush()
         source = AnalysisFile(
+            workspace_id=workspace.id,
             session_id=chat_session.id,
             created_by=user.id,
             filename="stored-production.xlsx",
@@ -301,8 +308,12 @@ def test_analysis_job_list_cancel_and_retry(tmp_path: Path) -> None:
             principal,
         )
         assert queued.progress == 0
-        items, total = service.list_jobs(chat_session.id, principal)
+        items, total, resolved_workspace_id = service.list_jobs(
+            principal,
+            session_id=chat_session.id,
+        )
         assert total == 1
+        assert resolved_workspace_id == workspace.id
         assert [item.id for item in items] == [queued.id]
 
         cancelled = service.cancel(queued.id, principal)

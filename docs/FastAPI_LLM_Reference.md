@@ -3,7 +3,7 @@ document_id: lm-agent-fastapi-llm-reference
 document_type: api_contract_companion
 language: zh-TW
 api_name: LM Agent API
-api_version: 0.10.0
+api_version: 0.11.0
 base_path: /api/v1
 branch: codex/session-analysis-workspace
 updated_at: 2026-07-30
@@ -33,7 +33,7 @@ legacy_detail: docs/Fastapi_spec.md
 ```yaml
 service:
   title: LM Agent API
-  version: 0.10.0
+  version: 0.11.0
   base_path: /api/v1
   docs:
     swagger: /docs
@@ -340,27 +340,33 @@ page: integer(min=1,default=1)
 page_size: integer(min=1,max=100,default=20)
 ```
 
-### 4.4 Analysis
+### 4.4 Workspace and Analysis
 
-All analysis resources are Session-scoped. Access is limited to the Session owner or admin.
+Analysis resources are Workspace-scoped. Sessions are optional interaction origins.
+Access uses Workspace `read`/`write`/`admin` permissions plus file confidentiality clearance.
 Analysis files are not documents, do not create chunks or embeddings, and are not searchable
 through Chat retrieval.
 
 | Method | Path | Auth | Request | Response |
 | --- | --- | --- | --- | --- |
-| POST | `/analysis/files/upload` | owner-or-admin | multipart fields | `AnalysisFileUploadResponse` |
-| GET | `/analysis/files` | owner-or-admin | `session_id` query UUID | `AnalysisFileListResponse` |
-| GET | `/analysis/files/{file_id}/inspect` | owner-or-admin | path UUID | `SpreadsheetInspectionResponse` |
-| DELETE | `/analysis/files/{file_id}` | owner-or-admin | path UUID | 204 |
-| POST | `/analysis/plans/validate` | owner-or-admin | `AnalysisPlanValidateRequest` | `AnalysisPlanValidationResponse` |
-| POST | `/analysis/jobs` | owner-or-admin | `AnalysisJobCreate` | `AnalysisJobResponse`, HTTP 202 |
-| GET | `/analysis/jobs/{job_id}` | owner-or-admin | path UUID | `AnalysisJobResponse` |
-| POST | `/analysis/jobs/{job_id}/explain` | owner-or-admin | path UUID | `AnalysisExplanationResponse` |
+| POST | `/workspaces` | authenticated | `WorkspaceCreate` | `WorkspaceResponse` |
+| GET | `/workspaces` | authenticated | none | `WorkspaceListResponse` |
+| PUT | `/workspaces/{workspace_id}/sessions/{session_id}` | workspace-read + session-owner | path UUIDs | `WorkspaceSessionLinkResponse` |
+| POST | `/workspaces/{workspace_id}/permissions` | workspace-admin | `WorkspacePermissionCreate` | `WorkspacePermissionResponse` |
+| POST | `/analysis/files/upload` | workspace-write | multipart fields | `AnalysisFileUploadResponse` |
+| GET | `/analysis/files` | workspace-read | `workspace_id` or compatible `session_id` | `AnalysisFileListResponse` |
+| GET | `/analysis/files/{file_id}/inspect` | workspace-read | path UUID | `SpreadsheetInspectionResponse` |
+| DELETE | `/analysis/files/{file_id}` | workspace-write | path UUID | 204 |
+| POST | `/analysis/plans/validate` | workspace-read | `AnalysisPlanValidateRequest` | `AnalysisPlanValidationResponse` |
+| POST | `/analysis/jobs` | workspace-write | `AnalysisJobCreate` | `AnalysisJobResponse`, HTTP 202 |
+| GET | `/analysis/jobs/{job_id}` | workspace-read | path UUID | `AnalysisJobResponse` |
+| POST | `/analysis/jobs/{job_id}/explain` | workspace-read | path UUID | `AnalysisExplanationResponse` |
 
 ```yaml
 AnalysisFileUploadMultipart:
   file: binary(required; xlsx|csv)
   session_id: UUID(required)
+  workspace_id: UUID(optional)
   confidential_level: ConfidentialLevel = internal
 
 AnalysisFileUploadResponse:
@@ -423,7 +429,7 @@ AnalysisPlan:
     - raw-row sort without aggregations is rejected
     - output fields used by sort and charts must exist
     - aggregation aliases must be unique and must not collide with group_by names;
-      clients must enforce this because backend 0.10.0 does not fully reject collisions
+      backend rejects duplicate aliases and aliases that collide with group_by columns
 
 AnalysisPlanValidateRequest:
   file_id: UUID

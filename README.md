@@ -464,7 +464,8 @@ Main API groups:
 | Chat | `/api/v1/chat` | RAG question answering |
 | Code Chat | `/api/v1/code-chat` | Code-oriented question answering |
 | Documents | `/api/v1/documents` | Document upload and management |
-| Analysis | `/api/v1/analysis` | Session-scoped XLSX/CSV deterministic analysis |
+| Workspace | `/api/v1/workspaces` | Persistent analysis ownership and sharing |
+| Analysis | `/api/v1/analysis` | Workspace-scoped XLSX/CSV deterministic analysis |
 | Skills | `/api/v1/skills` | Skill CRUD, bundled files, and raw previews |
 | Knowledge Bases | `/api/v1/knowledge-bases` | Knowledge base management |
 | LLMWiki | `/api/v1/llmwiki` | Durable compiled knowledge pages and graph |
@@ -511,13 +512,24 @@ Important endpoints:
 - `GET /api/v1/chat/sessions/{session_id}/attachments`
 - `DELETE /api/v1/chat/sessions/{session_id}/attachments/{document_id}`
 - `DELETE /api/v1/chat/sessions/{session_id}`
+- `POST /api/v1/workspaces`
+- `GET /api/v1/workspaces`
+- `GET /api/v1/workspaces/{workspace_id}`
+- `PATCH /api/v1/workspaces/{workspace_id}`
+- `DELETE /api/v1/workspaces/{workspace_id}`
+- `PUT /api/v1/workspaces/{workspace_id}/sessions/{session_id}`
+- `POST /api/v1/workspaces/{workspace_id}/permissions`
+- `GET /api/v1/workspaces/{workspace_id}/permissions`
 - `POST /api/v1/analysis/files/upload`
 - `GET /api/v1/analysis/files`
 - `GET /api/v1/analysis/files/{file_id}/inspect`
 - `DELETE /api/v1/analysis/files/{file_id}`
 - `POST /api/v1/analysis/plans/validate`
 - `POST /api/v1/analysis/jobs`
+- `GET /api/v1/analysis/jobs`
 - `GET /api/v1/analysis/jobs/{job_id}`
+- `POST /api/v1/analysis/jobs/{job_id}/cancel`
+- `POST /api/v1/analysis/jobs/{job_id}/retry`
 - `POST /api/v1/analysis/jobs/{job_id}/explain`
 - `POST /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/permissions/documents/{document_id}`
@@ -542,6 +554,12 @@ the LLM-readable API contract.
 Chat and Code Chat can restrict retrieval with `attachment_ids` and
 `retrieval_scope`. Session attachment listing and single-attachment deletion are
 available under `/api/v1/chat/sessions/{session_id}/attachments`.
+
+XLSX and CSV analysis data is owned by a persistent Workspace rather than a
+single Chat Session. Deleting a Session removes its messages and temporary RAG
+documents but only detaches Workspace analysis data. Files and results remain
+available to other linked Sessions until the file or Workspace is explicitly
+deleted.
 
 Large XLSX/CSV files that require exact filtering, grouping, aggregation, or chart
 data use `/api/v1/analysis`, not document RAG. The analysis worker computes bounded

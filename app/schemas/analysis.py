@@ -30,6 +30,7 @@ class SpreadsheetSheetInfo(BaseModel):
 
 class SpreadsheetInspectionResponse(BaseModel):
     file_id: UUID
+    workspace_id: UUID
     filename: str
     file_type: str
     sheets: list[SpreadsheetSheetInfo]
@@ -38,7 +39,8 @@ class SpreadsheetInspectionResponse(BaseModel):
 
 class AnalysisFileUploadResponse(BaseModel):
     file_id: UUID
-    session_id: UUID
+    workspace_id: UUID
+    session_id: UUID | None = None
     filename: str
     file_type: str
     size_bytes: int
@@ -51,7 +53,8 @@ class AnalysisFileItem(AnalysisFileUploadResponse):
 
 
 class AnalysisFileListResponse(BaseModel):
-    session_id: UUID
+    workspace_id: UUID
+    session_id: UUID | None = None
     items: list[AnalysisFileItem]
 
 
@@ -120,14 +123,9 @@ class AnalysisPlan(BaseModel):
         if not self.select and not self.aggregations:
             raise ValueError("select or aggregations is required")
         aliases = [item.alias for item in self.aggregations]
-        duplicate_aliases = sorted(
-            alias for alias in set(aliases) if aliases.count(alias) > 1
-        )
+        duplicate_aliases = sorted(alias for alias in set(aliases) if aliases.count(alias) > 1)
         if duplicate_aliases:
-            raise ValueError(
-                "aggregation aliases must be unique: "
-                + ", ".join(duplicate_aliases)
-            )
+            raise ValueError("aggregation aliases must be unique: " + ", ".join(duplicate_aliases))
         conflicting_aliases = sorted(set(aliases) & set(self.group_by))
         if conflicting_aliases:
             raise ValueError(
@@ -150,12 +148,14 @@ class AnalysisPlanValidationResponse(BaseModel):
 
 class AnalysisJobCreate(BaseModel):
     file_id: UUID
+    session_id: UUID | None = None
     plan: AnalysisPlan
 
 
 class AnalysisJobResponse(BaseModel):
     job_id: UUID
-    session_id: UUID
+    workspace_id: UUID
+    session_id: UUID | None = None
     file_id: UUID
     status: AnalysisJobStatus
     plan: AnalysisPlan
@@ -170,7 +170,8 @@ class AnalysisJobResponse(BaseModel):
 
 
 class AnalysisJobListResponse(BaseModel):
-    session_id: UUID
+    workspace_id: UUID
+    session_id: UUID | None = None
     items: list[AnalysisJobResponse]
     total: int
     page: int

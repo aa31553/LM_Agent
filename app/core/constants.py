@@ -42,6 +42,7 @@ class PermissionSubjectType(TextEnum):
     USER = "user"
     ROLE = "role"
     DEPARTMENT = "department"
+    PROJECT = "project"
 
 
 class PermissionLevel(TextEnum):
@@ -75,6 +76,11 @@ class AnalysisJobStatus(TextEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class WorkspaceVisibility(TextEnum):
+    PRIVATE = "private"
+    SHARED = "shared"
 
 
 class DLPAction(TextEnum):

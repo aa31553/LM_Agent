@@ -101,12 +101,28 @@ def test_startup_check_initializes_missing_sqlite_schema(tmp_path, monkeypatch) 
             )
         }
         document_columns = {
-            row[1]: bool(row[3])
-            for row in connection.execute(text("PRAGMA table_info(documents)"))
+            row[1]: bool(row[3]) for row in connection.execute(text("PRAGMA table_info(documents)"))
         }
-    assert {"documents", "document_chunks", "chat_sessions"}.issubset(table_names)
+        chat_session_columns = {
+            row[1]: bool(row[3])
+            for row in connection.execute(text("PRAGMA table_info(chat_sessions)"))
+        }
+        analysis_file_columns = {
+            row[1]: bool(row[3])
+            for row in connection.execute(text("PRAGMA table_info(analysis_files)"))
+        }
+    assert {
+        "documents",
+        "document_chunks",
+        "chat_sessions",
+        "workspaces",
+        "workspace_permissions",
+        "analysis_artifacts",
+    }.issubset(table_names)
     assert document_columns["session_id"] is False
     assert document_columns["knowledge_base_id"] is False
+    assert chat_session_columns["workspace_id"] is False
+    assert analysis_file_columns["workspace_id"] is True
     engine.dispose()
 
 
@@ -119,18 +135,14 @@ def test_startup_check_upgrades_legacy_sqlite_document_scope(tmp_path, monkeypat
         connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
         connection.exec_driver_sql("DROP TABLE documents")
         connection.exec_driver_sql(
-            "CREATE TABLE documents ("
-            "id CHAR(32) PRIMARY KEY, "
-            "knowledge_base_id CHAR(32) NOT NULL"
-            ")"
+            "CREATE TABLE documents (id CHAR(32) PRIMARY KEY, knowledge_base_id CHAR(32) NOT NULL)"
         )
 
     startup.ensure_database_ready()
 
     with engine.connect() as connection:
         document_columns = {
-            row[1]: bool(row[3])
-            for row in connection.execute(text("PRAGMA table_info(documents)"))
+            row[1]: bool(row[3]) for row in connection.execute(text("PRAGMA table_info(documents)"))
         }
     assert document_columns["session_id"] is False
     assert document_columns["knowledge_base_id"] is False

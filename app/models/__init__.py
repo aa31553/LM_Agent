@@ -9,8 +9,10 @@ from app.models.masking import MaskingEvent, SensitiveDictionary
 from app.models.permission import DocumentPermission, KnowledgeBasePermission
 from app.models.prompt import PromptTemplate
 from app.models.user import Role, User, user_roles
+from app.models.workspace import AnalysisArtifact, Workspace, WorkspacePermission
 
 __all__ = [
+    "AnalysisArtifact",
     "AnalysisFile",
     "AnalysisJob",
     "AuditEvent",
@@ -30,5 +32,7 @@ __all__ = [
     "Role",
     "SensitiveDictionary",
     "User",
+    "Workspace",
+    "WorkspacePermission",
     "user_roles",
 ]

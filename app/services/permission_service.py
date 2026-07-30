@@ -91,7 +91,10 @@ class PermissionService:
             user = UserRepository(self.db).get_by_external_user_id(principal.external_user_id)
             if user is not None and knowledge_base.created_by == user.id:
                 return True
-        if knowledge_base.owner_department and principal.department == knowledge_base.owner_department:
+        if (
+            knowledge_base.owner_department
+            and principal.department == knowledge_base.owner_department
+        ):
             return True
         if self.db is None:
             return True
@@ -102,9 +105,15 @@ class PermissionService:
             return True
         return self._permissions_allow(principal, permissions, PermissionLevel.READ)
 
-    def ensure_knowledge_base_read(self, principal: Principal, knowledge_base: KnowledgeBase) -> None:
+    def ensure_knowledge_base_read(
+        self, principal: Principal, knowledge_base: KnowledgeBase
+    ) -> None:
         if not self.can_access_knowledge_base(principal, knowledge_base):
-            raise APIError(ErrorCode.PERMISSION_DENIED, "User does not have access to this knowledge base.", 403)
+            raise APIError(
+                ErrorCode.PERMISSION_DENIED,
+                "User does not have access to this knowledge base.",
+                403,
+            )
 
     def can_write_knowledge_base(self, principal: Principal, knowledge_base: KnowledgeBase) -> bool:
         if not principal.is_active:
@@ -121,11 +130,19 @@ class PermissionService:
         )
         return self._permissions_allow(principal, permissions, PermissionLevel.WRITE)
 
-    def ensure_knowledge_base_write(self, principal: Principal, knowledge_base: KnowledgeBase) -> None:
+    def ensure_knowledge_base_write(
+        self, principal: Principal, knowledge_base: KnowledgeBase
+    ) -> None:
         if not self.can_write_knowledge_base(principal, knowledge_base):
-            raise APIError(ErrorCode.PERMISSION_DENIED, "Write permission is required for this knowledge base.", 403)
+            raise APIError(
+                ErrorCode.PERMISSION_DENIED,
+                "Write permission is required for this knowledge base.",
+                403,
+            )
 
-    def can_manage_knowledge_base(self, principal: Principal, knowledge_base: KnowledgeBase) -> bool:
+    def can_manage_knowledge_base(
+        self, principal: Principal, knowledge_base: KnowledgeBase
+    ) -> bool:
         if not principal.is_active:
             return False
         if "admin" in principal.roles:
@@ -140,9 +157,15 @@ class PermissionService:
         )
         return self._permissions_allow(principal, permissions, PermissionLevel.ADMIN)
 
-    def ensure_knowledge_base_manage(self, principal: Principal, knowledge_base: KnowledgeBase) -> None:
+    def ensure_knowledge_base_manage(
+        self, principal: Principal, knowledge_base: KnowledgeBase
+    ) -> None:
         if not self.can_manage_knowledge_base(principal, knowledge_base):
-            raise APIError(ErrorCode.PERMISSION_DENIED, "Knowledge base administrator permission is required.", 403)
+            raise APIError(
+                ErrorCode.PERMISSION_DENIED,
+                "Knowledge base administrator permission is required.",
+                403,
+            )
 
     def can_write_document(self, principal: Principal, document: Document) -> bool:
         if not principal.is_active:
@@ -172,7 +195,9 @@ class PermissionService:
 
     def ensure_document_write(self, principal: Principal, document: Document) -> None:
         if not self.can_write_document(principal, document):
-            raise APIError(ErrorCode.PERMISSION_DENIED, "Write permission is required for this document.", 403)
+            raise APIError(
+                ErrorCode.PERMISSION_DENIED, "Write permission is required for this document.", 403
+            )
 
     def can_manage_document(self, principal: Principal, document: Document) -> bool:
         if "admin" in principal.roles:
@@ -190,7 +215,9 @@ class PermissionService:
 
     def ensure_document_manage(self, principal: Principal, document: Document) -> None:
         if not self.can_manage_document(principal, document):
-            raise APIError(ErrorCode.PERMISSION_DENIED, "Document administrator permission is required.", 403)
+            raise APIError(
+                ErrorCode.PERMISSION_DENIED, "Document administrator permission is required.", 403
+            )
 
     def create_or_update_document_permission(
         self,
@@ -261,7 +288,9 @@ class PermissionService:
         self.db.refresh(created)
         return created
 
-    def list_knowledge_base_permissions(self, knowledge_base_id: UUID) -> list[KnowledgeBasePermission]:
+    def list_knowledge_base_permissions(
+        self, knowledge_base_id: UUID
+    ) -> list[KnowledgeBasePermission]:
         if self.db is None:
             raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
         return KnowledgeBasePermissionRepository(self.db).list_for_knowledge_base(knowledge_base_id)
@@ -281,7 +310,11 @@ class PermissionService:
         required: PermissionLevel,
     ) -> bool:
         allowed_levels = {
-            PermissionLevel.READ: {PermissionLevel.READ.value, PermissionLevel.WRITE.value, PermissionLevel.ADMIN.value},
+            PermissionLevel.READ: {
+                PermissionLevel.READ.value,
+                PermissionLevel.WRITE.value,
+                PermissionLevel.ADMIN.value,
+            },
             PermissionLevel.WRITE: {PermissionLevel.WRITE.value, PermissionLevel.ADMIN.value},
             PermissionLevel.ADMIN: {PermissionLevel.ADMIN.value},
         }[required]
@@ -296,6 +329,9 @@ class PermissionService:
                     return True
             elif permission.subject_type == PermissionSubjectType.ROLE.value:
                 if permission.subject_value in principal.roles:
+                    return True
+            elif permission.subject_type == PermissionSubjectType.PROJECT.value:
+                if permission.subject_value in principal.projects:
                     return True
         return False
 
