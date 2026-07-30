@@ -287,6 +287,13 @@ class AnalysisPlanDraftCreate(BaseModel):
     session_id: UUID | None = None
 
 
+class AnalysisNormalizationAction(BaseModel):
+    code: str
+    path: str | None = None
+    source_field: str | None = None
+    target_field: str | None = None
+
+
 class AnalysisPlanDraftResponse(BaseModel):
     draft_id: UUID
     workspace_id: UUID
@@ -295,6 +302,9 @@ class AnalysisPlanDraftResponse(BaseModel):
     file_ids: list[UUID]
     plan: AnalysisPlan
     warnings: list[str] = Field(default_factory=list)
+    normalization_actions: list[AnalysisNormalizationAction] = Field(default_factory=list)
+    validation_errors: list[str] = Field(default_factory=list)
+    repair_attempted: bool = False
     status: AnalysisPlanDraftStatus
     confirmation_required: bool = True
     usage: LLMUsage = Field(default_factory=LLMUsage)
