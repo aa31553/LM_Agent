@@ -1,7 +1,7 @@
 # Session Attachments and Persistent Spreadsheet Workspace
 
 > Branch: `codex/session-analysis-workspace`<br>
-> API version: `0.11.0`<br>
+> API version: `0.12.0`<br>
 > Updated: 2026-07-30<br>
 > Frontend implementation guide:
 > [Frontend_File_Upload_Guide.md](Frontend_File_Upload_Guide.md)
@@ -103,25 +103,32 @@ is checked in addition to Workspace membership.
 ## Spreadsheet analysis workflow
 
 1. Upload an XLSX or CSV file.
-2. Inspect sheets, columns, inferred types, and sample rows.
-3. Build an `AnalysisPlan` in the frontend.
-4. Validate the plan against the actual schema.
-5. Create a queued analysis job.
-6. Run `python -m app.workers.analysis_tasks` in a separate process.
-7. Poll the job until it is completed, failed, or cancelled.
-8. Render the returned table and chart JSON directly in the frontend.
-9. Optionally ask the 31B LLM to explain the completed result JSON.
+2. The analysis worker profiles the source and converts every Sheet to Parquet.
+3. Poll the file until `status=ready`, then inspect schemas and samples.
+4. Build an `AnalysisPlan`, or ask the LLM to create a constrained plan draft.
+5. Validate and explicitly confirm the plan draft.
+6. Create a queued analysis job.
+7. Run `python -m app.workers.analysis_tasks` in a separate process.
+8. Poll the job until it is completed, failed, or cancelled.
+9. Render the returned table and Chart Schema through the ECharts Adapter.
+10. Optionally combine completed results with authorized KB evidence.
+11. Save reports, chart specifications, and exports as managed artifacts.
 
 ### Routes
 
 | Method | Route | Purpose |
 |---|---|---|
-| POST | `/api/v1/analysis/files/upload` | Stream an XLSX/CSV into Workspace storage; accepts required `session_id` and optional `workspace_id` |
+| POST | `/api/v1/analysis/files/upload` | Stream an XLSX/CSV; accepts `session_id`, or `workspace_id` without a Session |
 | GET | `/api/v1/analysis/files?workspace_id=...` | List files directly by Workspace |
 | GET | `/api/v1/analysis/files?session_id=...` | Compatible route; resolves the Session's Workspace |
+| GET | `/api/v1/analysis/files/{file_id}` | Poll profile status, progress, errors, and dataset count |
 | GET | `/api/v1/analysis/files/{file_id}/inspect` | Return workbook schema and samples |
+| POST | `/api/v1/analysis/files/{file_id}/profile/retry` | Queue preprocessing again |
 | DELETE | `/api/v1/analysis/files/{file_id}` | Delete file and jobs |
 | POST | `/api/v1/analysis/plans/validate` | Validate and normalize a whitelist plan |
+| POST | `/api/v1/analysis/plan-drafts` | Natural language to a constrained, validated draft |
+| GET | `/api/v1/analysis/plan-drafts/{draft_id}` | Read a draft and validation warnings |
+| POST | `/api/v1/analysis/plan-drafts/{draft_id}/confirm` | Confirm a draft and queue its Job |
 | POST | `/api/v1/analysis/jobs` | Queue an analysis job |
 | GET | `/api/v1/analysis/jobs?workspace_id=...` | List and filter paginated jobs for a Workspace |
 | GET | `/api/v1/analysis/jobs?session_id=...` | Compatible route; resolves the Session's Workspace |
@@ -129,6 +136,12 @@ is checked in addition to Workspace membership.
 | POST | `/api/v1/analysis/jobs/{job_id}/cancel` | Cancel a queued or running job |
 | POST | `/api/v1/analysis/jobs/{job_id}/retry` | Queue a new attempt for a failed or cancelled job |
 | POST | `/api/v1/analysis/jobs/{job_id}/explain` | Ask the LLM to explain a completed result |
+| POST | `/api/v1/analysis/hybrid-answer` | Combine completed results with authorized KB evidence |
+| POST | `/api/v1/analysis/jobs/{job_id}/export` | Save CSV, JSON, or Parquet export |
+| POST | `/api/v1/analysis/jobs/{job_id}/reports` | Save a Markdown report |
+| POST | `/api/v1/analysis/jobs/{job_id}/charts` | Save a versioned Chart Schema artifact |
+| GET | `/api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}` | Read artifact metadata |
+| GET | `/api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}/download` | Download an artifact |
 
 ### Supported deterministic operations
 
@@ -139,6 +152,11 @@ is checked in addition to Workspace membership.
 - Aggregate: `count`, `sum`, `mean`, sample `std`, `min`, `max`, `count_if`
 - Sort aggregated output
 - Generate bar, line, or scatter chart payloads
+- Join up to eight preprocessed Sheets/files with explicit keys
+- Date buckets: day, week, month, quarter, year
+- Distinct count and percentile
+- Pivot/cross table
+- Pearson or Spearman correlation matrix
 
 The backend never executes model-generated Python or SQL. Unknown columns,
 incompatible numeric operations, unsupported output fields, oversized row counts,
@@ -222,7 +240,45 @@ JavaScript is evaluated.
 The LLM explanation endpoint receives only bounded result JSON. Its fixed prompt
 states that calculations are final, numbers must not be changed, and causal claims
 must not be invented. DLP masking and the shared LLM concurrency limiter are applied.
-No autonomous tool planning is required from the 31B model.
+No autonomous tool planning is required from the 31B model. Natural-language
+planning is a two-step operation: the model emits JSON, the backend validates it
+against actual Parquet schemas, and the user must call `confirm` before a Job
+exists. A draft cannot execute Python, SQL, JavaScript, or arbitrary tool calls.
+
+## Preprocessing and query engines
+
+New uploads return `status=profile_queued`. The dedicated analysis worker claims
+profile tasks before analysis Jobs:
+
+```text
+original XLSX/CSV
+  -> read-only streaming extraction
+  -> DuckDB CSV inference / Parquet conversion
+  -> Polars lazy schema and null profiling
+  -> profile.json + dataset_manifest
+  -> status=ready
+```
+
+Each XLSX Sheet becomes a separate Parquet dataset. CSV becomes one `CSV`
+dataset. Original files remain unchanged. Formula values still use the cache last
+saved by Excel and VBA is never executed.
+
+Advanced Jobs read only server-created `dataset_manifest` paths. User or model
+text cannot supply filesystem paths. Column references, Join keys, aggregations,
+output fields, row/group limits, chart points, and export rows are validated.
+
+## Hybrid answer boundary
+
+`POST /api/v1/analysis/hybrid-answer` accepts completed `analysis_job_ids` and
+authorized `knowledge_base_ids`. The prompt separates them into:
+
+- `COMPUTED_ANALYSIS_FACTS`: immutable backend calculation results.
+- `KNOWLEDGE_BASE_EVIDENCE`: permission-filtered RAG chunks.
+
+The LLM cites an Analysis Job for numeric observations and `[Source N]` for
+document explanations. It may not turn a general SOP statement into a causal
+claim about the spreadsheet. DLP and Workspace/KB permissions are applied before
+context reaches the LLM.
 
 ## Cross-Session reuse
 
@@ -243,6 +299,7 @@ local_storage_root/
     ├── files/{file_id}/
     │   ├── original/{filename}
     │   ├── profile/profile.json
+    │   ├── datasets/{sheet_key}.parquet
     │   └── metadata.json
     ├── jobs/{job_id}/
     │   └── results/result.json

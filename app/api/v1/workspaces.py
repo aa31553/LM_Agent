@@ -2,8 +2,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response
 from fastapi import status as http_status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.core.constants import ErrorCode
+from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
 from app.models.workspace import Workspace
@@ -19,7 +22,9 @@ from app.schemas.workspace import (
     WorkspaceSessionLinkResponse,
     WorkspaceUpdate,
 )
+from app.services.analysis_artifact_service import AnalysisArtifactService
 from app.services.workspace_service import WorkspaceService
+from app.storage.workspace_storage import WorkspaceStorage
 
 router = APIRouter()
 
@@ -190,21 +195,43 @@ def list_workspace_artifacts(
     artifacts = WorkspaceService(db).list_artifacts(workspace_id, principal)
     return AnalysisArtifactListResponse(
         workspace_id=workspace_id,
-        items=[
-            AnalysisArtifactResponse(
-                artifact_id=item.id,
-                workspace_id=item.workspace_id,
-                file_id=item.file_id,
-                job_id=item.job_id,
-                artifact_type=item.artifact_type,
-                filename=item.filename,
-                mime_type=item.mime_type,
-                size_bytes=item.size_bytes,
-                metadata=item.artifact_metadata,
-                created_at=item.created_at,
-            )
-            for item in artifacts
-        ],
+        items=[_artifact_response(item) for item in artifacts],
+    )
+
+
+@router.get(
+    "/{workspace_id}/artifacts/{artifact_id}",
+    response_model=AnalysisArtifactResponse,
+)
+def get_workspace_artifact(
+    workspace_id: UUID,
+    artifact_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisArtifactResponse:
+    artifact = AnalysisArtifactService(db).get(artifact_id, principal)
+    if artifact.workspace_id != workspace_id:
+        raise APIError(ErrorCode.ANALYSIS_NOT_FOUND, "Analysis artifact not found.", 404)
+    return _artifact_response(artifact)
+
+
+@router.get("/{workspace_id}/artifacts/{artifact_id}/download")
+def download_workspace_artifact(
+    workspace_id: UUID,
+    artifact_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    artifact = AnalysisArtifactService(db).get(artifact_id, principal)
+    if artifact.workspace_id != workspace_id:
+        raise APIError(ErrorCode.ANALYSIS_NOT_FOUND, "Analysis artifact not found.", 404)
+    path = WorkspaceStorage().resolve_artifact(artifact.file_path)
+    if path is None:
+        raise APIError(ErrorCode.ANALYSIS_NOT_FOUND, "Artifact file is unavailable.", 404)
+    return FileResponse(
+        path,
+        media_type=artifact.mime_type,
+        filename=artifact.filename,
     )
 
 
@@ -242,4 +269,19 @@ def _permission_response(permission) -> WorkspacePermissionResponse:
         created_by=permission.created_by,
         created_at=permission.created_at,
         updated_at=permission.updated_at,
+    )
+
+
+def _artifact_response(item) -> AnalysisArtifactResponse:
+    return AnalysisArtifactResponse(
+        artifact_id=item.id,
+        workspace_id=item.workspace_id,
+        file_id=item.file_id,
+        job_id=item.job_id,
+        artifact_type=item.artifact_type,
+        filename=item.filename,
+        mime_type=item.mime_type,
+        size_bytes=item.size_bytes,
+        metadata=item.artifact_metadata,
+        created_at=item.created_at,
     )

@@ -3,7 +3,7 @@ document_id: lm-agent-fastapi-llm-reference
 document_type: api_contract_companion
 language: zh-TW
 api_name: LM Agent API
-api_version: 0.11.0
+api_version: 0.12.0
 base_path: /api/v1
 branch: codex/session-analysis-workspace
 updated_at: 2026-07-30
@@ -33,7 +33,7 @@ legacy_detail: docs/Fastapi_spec.md
 ```yaml
 service:
   title: LM Agent API
-  version: 0.11.0
+  version: 0.12.0
   base_path: /api/v1
   docs:
     swagger: /docs

@@ -522,15 +522,23 @@ Important endpoints:
 - `GET /api/v1/workspaces/{workspace_id}/permissions`
 - `POST /api/v1/analysis/files/upload`
 - `GET /api/v1/analysis/files`
+- `GET /api/v1/analysis/files/{file_id}`
 - `GET /api/v1/analysis/files/{file_id}/inspect`
+- `POST /api/v1/analysis/files/{file_id}/profile/retry`
 - `DELETE /api/v1/analysis/files/{file_id}`
 - `POST /api/v1/analysis/plans/validate`
+- `POST /api/v1/analysis/plan-drafts`
+- `POST /api/v1/analysis/plan-drafts/{draft_id}/confirm`
 - `POST /api/v1/analysis/jobs`
 - `GET /api/v1/analysis/jobs`
 - `GET /api/v1/analysis/jobs/{job_id}`
 - `POST /api/v1/analysis/jobs/{job_id}/cancel`
 - `POST /api/v1/analysis/jobs/{job_id}/retry`
 - `POST /api/v1/analysis/jobs/{job_id}/explain`
+- `POST /api/v1/analysis/hybrid-answer`
+- `POST /api/v1/analysis/jobs/{job_id}/export`
+- `POST /api/v1/analysis/jobs/{job_id}/reports`
+- `POST /api/v1/analysis/jobs/{job_id}/charts`
 - `POST /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/permissions/documents/{document_id}`
 - `GET /api/v1/audit/chat-logs`
@@ -564,6 +572,17 @@ deleted.
 Large XLSX/CSV files that require exact filtering, grouping, aggregation, or chart
 data use `/api/v1/analysis`, not document RAG. The analysis worker computes bounded
 table/chart JSON without executing model-generated Python or SQL:
+
+New spreadsheet uploads are profiled in the background. XLSX Sheets and CSV
+sources are converted to Parquet with DuckDB, profiled and queried through Polars,
+and exposed only after the file reaches `ready`. Advanced plans support
+multi-Sheet/file Join, date buckets, Pivot, percentile, and correlation.
+
+Natural-language requests create a validated `AnalysisPlanDraft`; a separate
+confirmation call is required before a Job is queued. Completed analysis facts can
+be combined with authorized knowledge-base evidence through `hybrid-answer`.
+Reports, versioned chart schemas, and CSV/JSON/Parquet exports are stored as
+Workspace artifacts.
 
 ```bash
 python -m app.workers.analysis_tasks

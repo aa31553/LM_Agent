@@ -15,8 +15,9 @@
     if (!chart || typeof chart !== "object") {
       throw new TypeError("chart must be an object");
     }
-    if (!SUPPORTED_TYPES.has(chart.type)) {
-      throw new TypeError(`Unsupported chart type: ${String(chart.type)}`);
+    const chartType = chart.chart_type || chart.type;
+    if (!SUPPORTED_TYPES.has(chartType)) {
+      throw new TypeError(`Unsupported chart type: ${String(chartType)}`);
     }
     if (!chart.x_field || !chart.y_field) {
       throw new TypeError("chart.x_field and chart.y_field are required");
@@ -33,9 +34,17 @@
 
   function toEChartsOption(chart) {
     assertChart(chart);
+    const chartType = chart.chart_type || chart.type;
     const xValues = chart.data.map((row) => row?.[chart.x_field]);
-    const scatterHasNumericX = chart.type === "scatter" && numericAxis(xValues);
-    const dimensions = [chart.x_field, chart.y_field];
+    const scatterHasNumericX = chartType === "scatter" && numericAxis(xValues);
+    const dimensions = [
+      chart.x_field,
+      chart.y_field,
+      chart.series_field,
+      ...(chart.tooltip_fields || []),
+    ].filter((value, index, values) => value && values.indexOf(value) === index);
+    const interaction = chart.interaction || {};
+    const format = chart.format || {};
     const option = {
       animation: chart.data.length <= 2000,
       title: {
@@ -43,7 +52,7 @@
         left: "center",
       },
       tooltip: {
-        trigger: chart.type === "scatter" ? "item" : "axis",
+        trigger: chartType === "scatter" ? "item" : "axis",
       },
       grid: {
         left: 56,
@@ -57,7 +66,12 @@
         source: chart.data,
       },
       xAxis: {
-        type: scatterHasNumericX ? "value" : "category",
+        type:
+          chart.x_type === "time"
+            ? "time"
+            : chart.x_type === "value" || scatterHasNumericX
+              ? "value"
+              : "category",
         name: chart.x_field,
         axisLabel: {
           hideOverlap: true,
@@ -65,22 +79,15 @@
       },
       yAxis: {
         type: "value",
-        name: chart.y_field,
+        name: format.y_unit
+          ? `${chart.y_field} (${format.y_unit})`
+          : chart.y_field,
         scale: true,
+        axisLabel: format.y_unit
+          ? { formatter: `{value}${format.y_unit}` }
+          : undefined,
       },
-      series: [
-        {
-          name: chart.y_field,
-          type: chart.type,
-          encode: {
-            x: chart.x_field,
-            y: chart.y_field,
-            tooltip: dimensions,
-          },
-          showSymbol: chart.type !== "line" || chart.data.length <= 200,
-          large: chart.type !== "line" && chart.data.length > 2000,
-        },
-      ],
+      series: [],
       toolbox: {
         right: 12,
         feature: {
@@ -90,7 +97,40 @@
         },
       },
     };
-    if (chart.data.length > 30 && !scatterHasNumericX) {
+    if (chart.series_field) {
+      const names = [
+        ...new Set(chart.data.map((row) => String(row?.[chart.series_field] ?? ""))),
+      ];
+      option.legend = { top: 30, data: names };
+      delete option.dataset;
+      option.series = names.map((name) => ({
+        name,
+        type: chartType,
+        data: chart.data
+          .filter((row) => String(row?.[chart.series_field] ?? "") === name)
+          .map((row) => [row?.[chart.x_field], row?.[chart.y_field]]),
+        showSymbol: chartType !== "line" || chart.data.length <= 200,
+        large: chartType !== "line" && chart.data.length > 2000,
+      }));
+    } else {
+      option.series = [
+        {
+          name: chart.y_field,
+          type: chartType,
+          encode: {
+            x: chart.x_field,
+            y: chart.y_field,
+            tooltip: dimensions,
+          },
+          showSymbol: chartType !== "line" || chart.data.length <= 200,
+          large: chartType !== "line" && chart.data.length > 2000,
+        },
+      ];
+    }
+    if (
+      (interaction.zoom || chart.data.length > 30) &&
+      option.xAxis.type === "category"
+    ) {
       option.dataZoom = [
         { type: "inside", xAxisIndex: 0 },
         { type: "slider", xAxisIndex: 0, bottom: 14 },

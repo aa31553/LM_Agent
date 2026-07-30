@@ -1,7 +1,7 @@
 # LM Agent 前端檔案上傳與分析串接指南
 
 > 適用分支：`codex/session-analysis-workspace`<br>
-> API 版本：`0.11.0`<br>
+> API 版本：`0.12.0`<br>
 > 更新日期：2026-07-30<br>
 > 執行時最終契約：`GET /openapi.json`
 
@@ -531,8 +531,8 @@ const validation = await apiJson<{
 - chart：`bar`、`line`、`scatter`，最多 5 張。
 - 無 aggregation 時目前不支援 raw rows 排序。
 - 有 aggregation 時，`select` 會被忽略，輸出欄位來自 `group_by` 與 aggregation alias。
-- 每個 aggregation alias 必須唯一，也不得與 `group_by` 欄名相同。前端必須先檢查；
-  目前後端版本尚未完整拒絕碰撞，否則可能覆蓋結果欄位。
+- 每個 aggregation alias 必須唯一，也不得與 `group_by` 欄名相同；前後端皆應檢查，
+  後端會拒絕碰撞以避免覆蓋結果欄位。
 
 ### 5.5 建立 Job 並輪詢
 
@@ -699,6 +699,69 @@ const instance = LMAnalysisCharts.render(
 前端已隨附 ECharts 6.1.0 runtime，不需外部 CDN。圖表容器應套用
 `analysis-chart` class 以確保有可渲染高度。Adapter 僅接受 bar、line、
 scatter，不執行 API 或 LLM 回傳的 JavaScript。
+
+### 5.11 背景 Profiling 與 Parquet
+
+新上傳的 Excel／CSV 先回覆 `status: "profile_queued"`。前端以
+`GET /api/v1/analysis/files/{file_id}` 輪詢：
+
+```json
+{
+  "status": "profiling",
+  "profile_progress": 10,
+  "profile_error": null,
+  "dataset_count": 0
+}
+```
+
+只有 `status=ready` 才開放計畫建立。完成後 `dataset_count` 代表 CSV 資料集或
+XLSX Sheet 數量。`failed` 時顯示 `profile_error`，並讓使用者呼叫
+`POST /api/v1/analysis/files/{file_id}/profile/retry`。
+
+### 5.12 自然語言草稿與確認
+
+```http
+POST /api/v1/analysis/plan-drafts
+Content-Type: application/json
+
+{
+  "workspace_id": "WORKSPACE_UUID",
+  "session_id": "SESSION_UUID",
+  "question": "依月份與產線比較良率中位數",
+  "file_ids": ["FILE_UUID"]
+}
+```
+
+回覆包含受限 `plan`、`warnings`、`usage` 與
+`confirmation_required: true`。前端應顯示來源、Join、欄位、Filter、統計與圖表，
+允許使用者檢查後再呼叫：
+
+```http
+POST /api/v1/analysis/plan-drafts/{draft_id}/confirm
+
+{"plan": null}
+```
+
+confirm 前不會建立 Job。若前端傳入編輯後的 `plan`，後端會重新以實際 Parquet
+schema 驗證。
+
+### 5.13 Hybrid 與成果管理
+
+`POST /api/v1/analysis/hybrid-answer` 同時接收 `analysis_job_ids` 與
+`knowledge_base_ids`。回覆保留 KB citations 與 `report_artifact_id`。分析結果是
+不可修改的數據事實，KB 片段只用於 SOP、定義與背景解釋。
+
+完成 Job 可建立下列 artifact：
+
+```http
+POST /api/v1/analysis/jobs/{job_id}/export
+POST /api/v1/analysis/jobs/{job_id}/reports
+POST /api/v1/analysis/jobs/{job_id}/charts
+GET  /api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}/download
+```
+
+Export 支援 `csv`、`json`、`parquet`。Chart artifact 保存平台
+Chart Schema，不保存或執行任意 ECharts JavaScript。
 
 ## 6. UI 狀態與錯誤處理建議
 

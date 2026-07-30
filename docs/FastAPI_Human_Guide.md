@@ -1,7 +1,7 @@
 # LM Agent FastAPI 使用指南（Human 版）
 
 > 適用分支：`codex/session-analysis-workspace`<br>
-> API 版本：`0.11.0`<br>
+> API 版本：`0.12.0`<br>
 > 更新日期：2026-07-30
 
 本文件提供給前端工程師、後端工程師、系統管理員與測試人員閱讀。前端檔案流程與
@@ -205,15 +205,18 @@ DELETE /api/v1/chat/sessions/{session_id}
 
 1. 建立或選擇 `Workspace`，或讓舊上傳流程自動使用私人 Workspace
 2. `POST /api/v1/analysis/files/upload`
-3. `GET /api/v1/analysis/files/{file_id}/inspect`
-4. `POST /api/v1/analysis/plans/validate`
-5. `POST /api/v1/analysis/jobs`
-6. `GET /api/v1/analysis/jobs/{job_id}` 輪詢至 `completed` 或 `failed`
-7. 直接渲染 `result.table` 與 `result.charts`
-8. 可選擇呼叫 `POST /api/v1/analysis/jobs/{job_id}/explain`
+3. `GET /api/v1/analysis/files/{file_id}` 輪詢背景 profiling 至 `ready`
+4. `GET /api/v1/analysis/files/{file_id}/inspect`
+5. 建立 `AnalysisPlan`，或呼叫 `POST /api/v1/analysis/plan-drafts`
+6. 自然語言草稿須呼叫 `/analysis/plan-drafts/{draft_id}/confirm`
+7. `POST /api/v1/analysis/jobs`
+8. `GET /api/v1/analysis/jobs/{job_id}` 輪詢至 `completed` 或 `failed`
+9. 直接渲染 `result.table` 與 `result.charts`
+10. 可呼叫 `hybrid-answer`、`export`、`reports`、`charts` 管理成果
 
 分析檔不會建立 chunk 或 Embedding，也不會進入知識庫。後端只執行白名單
-`AnalysisPlan`，不執行 LLM 產生的 Python 或 SQL；31B LLM 僅負責解釋已完成的結果。
+`AnalysisPlan`，不執行 LLM 產生的 Python 或 SQL；31B LLM 只產生待確認的受限 JSON
+或解釋已完成結果。XLSX 每個 Sheet 會在背景轉為 Parquet，查詢使用 DuckDB／Polars。
 同一 Workspace 的不同 Session 可重複使用同一個 `file_id`，不需重新上傳。
 完整請求、回應與 TypeScript 範例請見
 [前端檔案上傳與分析串接指南](Frontend_File_Upload_Guide.md)。

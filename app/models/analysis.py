@@ -23,6 +23,10 @@ class AnalysisFile(Base):
     file_type: Mapped[str] = mapped_column(String(32), nullable=False)
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     profile_path: Mapped[str | None] = mapped_column(Text)
+    dataset_manifest: Mapped[dict | None] = mapped_column(JSON)
+    profile_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    profile_error: Mapped[str | None] = mapped_column(Text)
+    profiled_at: Mapped[datetime | None] = mapped_column(DateTime)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     confidential_level: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
@@ -55,7 +59,34 @@ class AnalysisJob(Base):
         nullable=True,
         index=True,
     )
+    draft_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("analysis_plan_drafts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class AnalysisPlanDraft(Base):
+    __tablename__ = "analysis_plan_drafts"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="SET NULL"), index=True
+    )
+    created_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    source_file_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    plan_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    warnings_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)

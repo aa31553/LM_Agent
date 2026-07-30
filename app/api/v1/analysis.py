@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.constants import (
+    AnalysisFileStatus,
     AnalysisJobStatus,
     ChatType,
     ConfidentialLevel,
@@ -22,22 +23,36 @@ from app.models.analysis import AnalysisFile, AnalysisJob
 from app.models.chat import ChatSession
 from app.models.workspace import AnalysisArtifact
 from app.schemas.analysis import (
+    AnalysisArtifactCreatedResponse,
+    AnalysisChartArtifactRequest,
     AnalysisExplanationResponse,
+    AnalysisExportRequest,
     AnalysisFileItem,
     AnalysisFileListResponse,
     AnalysisFileUploadResponse,
+    AnalysisHybridRequest,
+    AnalysisHybridResponse,
     AnalysisJobCreate,
     AnalysisJobListResponse,
     AnalysisJobResponse,
+    AnalysisPlanDraftConfirmRequest,
+    AnalysisPlanDraftCreate,
+    AnalysisPlanDraftResponse,
     AnalysisPlanValidateRequest,
     AnalysisPlanValidationResponse,
+    AnalysisReportRequest,
     SpreadsheetInspectionResponse,
 )
+from app.services.analysis_artifact_service import AnalysisArtifactService
 from app.services.analysis_job_service import AnalysisJobService
+from app.services.analysis_orchestrator_service import AnalysisOrchestratorService
 from app.services.audit_service import AuditService
 from app.services.chat_runtime_service import chat_runtime_service
+from app.services.dataset_query_service import DatasetQueryService
+from app.services.hybrid_analysis_service import HybridAnalysisService
 from app.services.permission_service import PermissionService
 from app.services.spreadsheet_analysis_service import SpreadsheetAnalysisService
+from app.services.spreadsheet_profile_job_service import SpreadsheetProfileJobService
 from app.services.workspace_service import WorkspaceService
 from app.storage.workspace_storage import WorkspaceStorage
 from app.utils.file_utils import infer_file_type
@@ -49,7 +64,7 @@ router = APIRouter()
 @router.post("/files/upload", response_model=AnalysisFileUploadResponse)
 async def upload_analysis_file(
     file: UploadFile = File(...),
-    session_id: UUID = Form(...),
+    session_id: UUID | None = Form(default=None),
     workspace_id: UUID | None = Form(default=None),
     confidential_level: ConfidentialLevel = Form(default=ConfidentialLevel.INTERNAL),
     principal: Principal = Depends(get_current_principal),
@@ -72,18 +87,32 @@ async def upload_analysis_file(
 
     audit_service = AuditService(db)
     user = audit_service.ensure_user(principal)
-    session = audit_service.ensure_session(
-        principal=principal,
-        user=user,
-        session_id=session_id,
-        title_seed=file.filename,
-        chat_type=ChatType.GENERAL,
-    )
-    workspace = WorkspaceService(db).resolve_for_session(
-        session,
-        principal,
-        workspace_id,
-    )
+    if session_id is None:
+        if workspace_id is None:
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "workspace_id is required when session_id is omitted.",
+                400,
+            )
+        session = None
+        workspace = WorkspaceService(db).get(
+            workspace_id,
+            principal,
+            PermissionLevel.WRITE,
+        )
+    else:
+        session = audit_service.ensure_session(
+            principal=principal,
+            user=user,
+            session_id=session_id,
+            title_seed=file.filename,
+            chat_type=ChatType.GENERAL,
+        )
+        workspace = WorkspaceService(db).resolve_for_session(
+            session,
+            principal,
+            workspace_id,
+        )
     file_id = uuid4()
     stored_filename = Path(file.filename).name
     storage = WorkspaceStorage()
@@ -105,7 +134,7 @@ async def upload_analysis_file(
     source = AnalysisFile(
         id=file_id,
         workspace_id=workspace.id,
-        session_id=session.id,
+        session_id=session.id if session is not None else None,
         created_by=user.id,
         filename=stored_filename,
         original_filename=file.filename,
@@ -113,7 +142,8 @@ async def upload_analysis_file(
         file_path=file_path,
         size_bytes=size_bytes,
         confidential_level=confidential_level.value,
-        status="ready",
+        status=AnalysisFileStatus.PROFILE_QUEUED.value,
+        profile_progress=0,
         expires_at=None,
     )
     db.add(source)
@@ -124,7 +154,7 @@ async def upload_analysis_file(
             {
                 "file_id": str(source.id),
                 "workspace_id": str(workspace.id),
-                "uploaded_from_session_id": str(session.id),
+                "uploaded_from_session_id": (str(session.id) if session is not None else None),
                 "original_filename": file.filename,
                 "file_type": file_type,
                 "size_bytes": size_bytes,
@@ -158,10 +188,12 @@ async def upload_analysis_file(
     return AnalysisFileUploadResponse(
         file_id=source.id,
         workspace_id=workspace.id,
-        session_id=session.id,
+        session_id=session.id if session is not None else None,
         filename=file.filename,
         file_type=file_type,
         size_bytes=size_bytes,
+        status=source.status,
+        profile_progress=source.profile_progress,
         expires_at=None,
     )
 
@@ -212,6 +244,10 @@ def list_analysis_files(
                 file_type=source.file_type,
                 size_bytes=source.size_bytes,
                 status=source.status,
+                profile_progress=source.profile_progress,
+                profile_error=source.profile_error,
+                dataset_count=len((source.dataset_manifest or {}).get("datasets", [])),
+                profiled_at=source.profiled_at,
                 expires_at=source.expires_at,
                 created_at=source.created_at,
             )
@@ -236,7 +272,7 @@ def inspect_analysis_file(
     if cached is not None and isinstance(cached.get("sheets"), list):
         sheets = cached["sheets"]
         warnings = cached.get("warnings", [])
-    else:
+    elif source.status == AnalysisFileStatus.READY.value:
         sheets = SpreadsheetAnalysisService().inspect(
             source.file_path,
             source.file_type,
@@ -248,6 +284,17 @@ def inspect_analysis_file(
             {"sheets": sheets, "warnings": warnings},
         )
         db.commit()
+    else:
+        raise APIError(
+            ErrorCode.DOCUMENT_NOT_READY,
+            "Spreadsheet profiling is not complete.",
+            409,
+            details={
+                "status": source.status,
+                "progress": source.profile_progress,
+                "error": source.profile_error,
+            },
+        )
     return SpreadsheetInspectionResponse(
         file_id=source.id,
         workspace_id=source.workspace_id,
@@ -255,6 +302,57 @@ def inspect_analysis_file(
         file_type=source.file_type,
         sheets=sheets,
         warnings=warnings,
+    )
+
+
+@router.get("/files/{file_id}", response_model=AnalysisFileItem)
+def get_analysis_file(
+    file_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisFileItem:
+    source = AnalysisJobService(db).get_analysis_file(file_id, principal)
+    return AnalysisFileItem(
+        file_id=source.id,
+        workspace_id=source.workspace_id,
+        session_id=source.session_id,
+        filename=source.original_filename,
+        file_type=source.file_type,
+        size_bytes=source.size_bytes,
+        status=source.status,
+        profile_progress=source.profile_progress,
+        profile_error=source.profile_error,
+        dataset_count=len((source.dataset_manifest or {}).get("datasets", [])),
+        profiled_at=source.profiled_at,
+        expires_at=source.expires_at,
+        created_at=source.created_at,
+    )
+
+
+@router.post(
+    "/files/{file_id}/profile/retry",
+    response_model=AnalysisFileUploadResponse,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
+def retry_spreadsheet_profile(
+    file_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisFileUploadResponse:
+    source = SpreadsheetProfileJobService(db).retry(file_id, principal)
+    return AnalysisFileUploadResponse(
+        file_id=source.id,
+        workspace_id=source.workspace_id,
+        session_id=source.session_id,
+        filename=source.original_filename,
+        file_type=source.file_type,
+        size_bytes=source.size_bytes,
+        status=source.status,
+        profile_progress=source.profile_progress,
+        profile_error=source.profile_error,
+        dataset_count=0,
+        profiled_at=source.profiled_at,
+        expires_at=source.expires_at,
     )
 
 
@@ -297,11 +395,28 @@ def validate_analysis_plan(
         payload.file_id,
         principal,
     )
-    normalized, warnings = SpreadsheetAnalysisService().validate_plan(
-        source.file_path,
-        source.file_type,
-        payload.plan,
-    )
+    if payload.plan.sources:
+        sources = [
+            AnalysisJobService(db).get_analysis_file(item.file_id, principal)
+            for item in payload.plan.sources
+        ]
+        if any(item.workspace_id != source.workspace_id for item in sources):
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "All analysis sources must belong to the same workspace.",
+                400,
+            )
+        manifests = {str(item.id): item.dataset_manifest for item in sources}
+        normalized, warnings = DatasetQueryService().validate_plan(
+            payload.plan,
+            manifests,
+        )
+    else:
+        normalized, warnings = SpreadsheetAnalysisService().validate_plan(
+            source.file_path,
+            source.file_type,
+            payload.plan,
+        )
     return AnalysisPlanValidationResponse(
         normalized_plan=normalized,
         warnings=warnings,
@@ -317,6 +432,60 @@ def create_analysis_job(
     service = AnalysisJobService(db)
     job = service.create(payload, principal)
     return service.response(job)
+
+
+@router.post(
+    "/plan-drafts",
+    response_model=AnalysisPlanDraftResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+async def create_analysis_plan_draft(
+    payload: AnalysisPlanDraftCreate,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisPlanDraftResponse:
+    reset_llm_token_usage()
+    service = AnalysisOrchestratorService(db)
+    async with chat_runtime_service.request_slot():
+        draft = await service.create_draft(payload, principal)
+    raw_usage = get_llm_token_usage()
+    response = service.response(draft)
+    response.usage.prompt_tokens = raw_usage.prompt_tokens
+    response.usage.completion_tokens = raw_usage.completion_tokens
+    response.usage.total_tokens = raw_usage.total_tokens
+    return response
+
+
+@router.get(
+    "/plan-drafts/{draft_id}",
+    response_model=AnalysisPlanDraftResponse,
+)
+def get_analysis_plan_draft(
+    draft_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisPlanDraftResponse:
+    service = AnalysisOrchestratorService(db)
+    return service.response(service.get(draft_id, principal))
+
+
+@router.post(
+    "/plan-drafts/{draft_id}/confirm",
+    response_model=AnalysisJobResponse,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
+def confirm_analysis_plan_draft(
+    draft_id: UUID,
+    payload: AnalysisPlanDraftConfirmRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisJobResponse:
+    job = AnalysisOrchestratorService(db).confirm(
+        draft_id,
+        principal,
+        edited_plan=payload.plan,
+    )
+    return AnalysisJobService(db).response(job)
 
 
 @router.get("/jobs", response_model=AnalysisJobListResponse)
@@ -407,4 +576,88 @@ async def explain_analysis_job(
             "completion_tokens": raw_usage.completion_tokens,
             "total_tokens": raw_usage.total_tokens,
         },
+    )
+
+
+@router.post(
+    "/hybrid-answer",
+    response_model=AnalysisHybridResponse,
+)
+async def hybrid_analysis_answer(
+    payload: AnalysisHybridRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisHybridResponse:
+    reset_llm_token_usage()
+    async with chat_runtime_service.request_slot():
+        answer, citations, report = await HybridAnalysisService(db).answer(
+            payload,
+            principal,
+        )
+    raw_usage = get_llm_token_usage()
+    return AnalysisHybridResponse(
+        workspace_id=payload.workspace_id,
+        answer=answer,
+        analysis_job_ids=payload.analysis_job_ids,
+        citations=citations,
+        report_artifact_id=report.id if report is not None else None,
+        usage={
+            "prompt_tokens": raw_usage.prompt_tokens,
+            "completion_tokens": raw_usage.completion_tokens,
+            "total_tokens": raw_usage.total_tokens,
+        },
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/export",
+    response_model=AnalysisArtifactCreatedResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+def export_analysis_job(
+    job_id: UUID,
+    payload: AnalysisExportRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisArtifactCreatedResponse:
+    return _artifact_created(AnalysisArtifactService(db).export(job_id, payload, principal))
+
+
+@router.post(
+    "/jobs/{job_id}/reports",
+    response_model=AnalysisArtifactCreatedResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+def create_analysis_report(
+    job_id: UUID,
+    payload: AnalysisReportRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisArtifactCreatedResponse:
+    return _artifact_created(AnalysisArtifactService(db).create_report(job_id, payload, principal))
+
+
+@router.post(
+    "/jobs/{job_id}/charts",
+    response_model=AnalysisArtifactCreatedResponse,
+    status_code=http_status.HTTP_201_CREATED,
+)
+def create_analysis_chart_artifact(
+    job_id: UUID,
+    payload: AnalysisChartArtifactRequest,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisArtifactCreatedResponse:
+    return _artifact_created(AnalysisArtifactService(db).create_chart(job_id, payload, principal))
+
+
+def _artifact_created(artifact: AnalysisArtifact) -> AnalysisArtifactCreatedResponse:
+    return AnalysisArtifactCreatedResponse(
+        artifact_id=artifact.id,
+        workspace_id=artifact.workspace_id,
+        job_id=artifact.job_id,
+        artifact_type=artifact.artifact_type,
+        filename=artifact.filename,
+        mime_type=artifact.mime_type or "application/octet-stream",
+        size_bytes=artifact.size_bytes,
     )

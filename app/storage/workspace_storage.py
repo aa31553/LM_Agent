@@ -79,6 +79,20 @@ class WorkspaceStorage:
         self._write_json(path, payload)
         return str(path)
 
+    def dataset_path(
+        self,
+        workspace_id: UUID,
+        file_id: UUID,
+        dataset_key: str,
+    ) -> Path:
+        return self._scoped_path(
+            workspace_id,
+            "files",
+            file_id,
+            "datasets",
+            f"{self._safe_dataset_key(dataset_key)}.parquet",
+        )
+
     def save_result(
         self,
         workspace_id: UUID,
@@ -108,6 +122,23 @@ class WorkspaceStorage:
             self._safe_filename(filename),
         )
 
+    def write_artifact_bytes(
+        self,
+        workspace_id: UUID,
+        artifact_id: UUID,
+        filename: str,
+        payload: bytes,
+    ) -> str:
+        path = self.artifact_path(workspace_id, artifact_id, filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f"{path.suffix}.tmp")
+        temporary.write_bytes(payload)
+        temporary.replace(path)
+        return str(path)
+
+    def resolve_artifact(self, raw_path: str) -> Path | None:
+        return self._validate_existing_file(raw_path)
+
     def load_json(self, raw_path: str) -> dict | None:
         path = self._validate_existing_file(raw_path)
         if path is None:
@@ -127,6 +158,12 @@ class WorkspaceStorage:
     def delete_job_tree(self, workspace_id: UUID, job_id: UUID) -> bool:
         return self._delete_tree(
             self._scoped_path(workspace_id, "jobs", job_id),
+            self.workspace_root(workspace_id),
+        )
+
+    def delete_artifact_tree(self, workspace_id: UUID, artifact_id: UUID) -> bool:
+        return self._delete_tree(
+            self._scoped_path(workspace_id, "artifacts", artifact_id),
             self.workspace_root(workspace_id),
         )
 
@@ -164,6 +201,14 @@ class WorkspaceStorage:
         safe = Path(filename).name
         if safe in {"", ".", ".."}:
             raise ValueError("A valid filename is required.")
+        return safe
+
+    @staticmethod
+    def _safe_dataset_key(value: str) -> str:
+        safe = "".join(character if character.isalnum() else "_" for character in value)
+        safe = safe.strip("_")[:96]
+        if not safe:
+            raise ValueError("A valid dataset key is required.")
         return safe
 
     @staticmethod

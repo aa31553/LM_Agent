@@ -1,4 +1,4 @@
-from app.models.analysis import AnalysisFile, AnalysisJob
+from app.models.analysis import AnalysisFile, AnalysisJob, AnalysisPlanDraft
 from app.models.audit import AuditEvent, LLMCallLog, RetrievalLog
 from app.models.chat import ChatMessage, ChatSession
 from app.models.document import Document, DocumentProcessingJob
@@ -15,6 +15,7 @@ __all__ = [
     "AnalysisArtifact",
     "AnalysisFile",
     "AnalysisJob",
+    "AnalysisPlanDraft",
     "AuditEvent",
     "ChatMessage",
     "ChatSession",

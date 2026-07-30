@@ -35,6 +35,19 @@ class SpreadsheetAnalysisService:
         file_type: str,
         plan: AnalysisPlan,
     ) -> tuple[AnalysisPlan, list[str]]:
+        if (
+            plan.sources
+            or plan.joins
+            or plan.date_buckets
+            or plan.pivot is not None
+            or plan.correlation is not None
+            or any(item.function in {"distinct_count", "percentile"} for item in plan.aggregations)
+        ):
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "Advanced operations require preprocessed dataset sources.",
+                400,
+            )
         sheets = self.inspect(file_path, file_type)
         selected_sheet = self._select_sheet(sheets, plan.sheet)
         source_headers = {item["name"]: item for item in selected_sheet["columns"]}
@@ -44,13 +57,9 @@ class SpreadsheetAnalysisService:
         source_references.update(condition.column for condition in plan.filters)
         source_references.update(item.column for item in plan.aggregations if item.column)
         source_references.update(
-            item.condition.column
-            for item in plan.aggregations
-            if item.condition is not None
+            item.condition.column for item in plan.aggregations if item.condition is not None
         )
-        missing_source = sorted(
-            name for name in source_references if name not in source_headers
-        )
+        missing_source = sorted(name for name in source_references if name not in source_headers)
         if missing_source:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -60,16 +69,16 @@ class SpreadsheetAnalysisService:
             )
 
         output_columns = (
-            set(plan.group_by) | aggregation_aliases
-            if plan.aggregations
-            else set(plan.select)
+            set(plan.group_by) | aggregation_aliases if plan.aggregations else set(plan.select)
         )
         output_references = {item.column for item in plan.sort}
         output_references.update(item.x_field for item in plan.charts)
         output_references.update(item.y_field for item in plan.charts)
-        missing_output = sorted(
-            name for name in output_references if name not in output_columns
+        output_references.update(
+            item.series_field for item in plan.charts if item.series_field is not None
         )
+        output_references.update(field for item in plan.charts for field in item.tooltip_fields)
+        missing_output = sorted(name for name in output_references if name not in output_columns)
         if missing_output:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -99,8 +108,7 @@ class SpreadsheetAnalysisService:
         warnings = list(selected_sheet.get("warnings", []))
         if normalized.select and normalized.aggregations:
             warnings.append(
-                "select is ignored for aggregation output; use group_by and "
-                "aggregation aliases."
+                "select is ignored for aggregation output; use group_by and aggregation aliases."
             )
         if normalized.aggregations and not normalized.group_by:
             warnings.append("The aggregation produces one overall result row.")
@@ -127,10 +135,7 @@ class SpreadsheetAnalysisService:
                     413,
                     details={"analysis_max_rows": settings.analysis_max_rows},
                 )
-            if not all(
-                self._matches(row.get(item.column), item)
-                for item in normalized.filters
-            ):
+            if not all(self._matches(row.get(item.column), item) for item in normalized.filters):
                 continue
             matched_rows += 1
 
@@ -140,16 +145,11 @@ class SpreadsheetAnalysisService:
                     settings.analysis_result_max_rows,
                 ):
                     extracted_rows.append(
-                        {
-                            name: self._json_value(row.get(name))
-                            for name in normalized.select
-                        }
+                        {name: self._json_value(row.get(name)) for name in normalized.select}
                     )
                 continue
 
-            key = tuple(
-                self._hashable(row.get(name)) for name in normalized.group_by
-            )
+            key = tuple(self._hashable(row.get(name)) for name in normalized.group_by)
             if key not in groups:
                 if len(groups) >= settings.analysis_max_groups:
                     raise APIError(
@@ -158,10 +158,7 @@ class SpreadsheetAnalysisService:
                         413,
                         details={"analysis_max_groups": settings.analysis_max_groups},
                     )
-                groups[key] = {
-                    item.alias: self._new_state()
-                    for item in normalized.aggregations
-                }
+                groups[key] = {item.alias: self._new_state() for item in normalized.aggregations}
             for item in normalized.aggregations:
                 self._update_state(
                     groups[key][item.alias],
@@ -188,32 +185,22 @@ class SpreadsheetAnalysisService:
 
         for sort in reversed(normalized.sort):
             result_rows.sort(
-                key=lambda item, column=sort.column: self._sort_key(
-                    item.get(column)
-                ),
+                key=lambda item, column=sort.column: self._sort_key(item.get(column)),
                 reverse=sort.direction == "desc",
             )
 
-        total_result_rows = (
-            len(result_rows) if normalized.aggregations else matched_rows
-        )
-        result_rows = result_rows[
-            : min(normalized.limit, settings.analysis_result_max_rows)
-        ]
+        total_result_rows = len(result_rows) if normalized.aggregations else matched_rows
+        result_rows = result_rows[: min(normalized.limit, settings.analysis_result_max_rows)]
         columns = (
             list(result_rows[0])
             if result_rows
             else (
-                normalized.group_by
-                + [item.alias for item in normalized.aggregations]
+                normalized.group_by + [item.alias for item in normalized.aggregations]
                 if normalized.aggregations
                 else normalized.select
             )
         )
-        charts = [
-            self._chart_payload(chart, result_rows)
-            for chart in normalized.charts
-        ]
+        charts = [self._chart_payload(chart, result_rows) for chart in normalized.charts]
         return {
             "summary": {
                 "processed_rows": processed_rows,
@@ -259,9 +246,7 @@ class SpreadsheetAnalysisService:
         formula_iterator = formula_worksheet.iter_rows()
         try:
             header_cells = next(value_iterator)
-            headers = self._normalize_headers(
-                [cell.value for cell in header_cells]
-            )
+            headers = self._normalize_headers([cell.value for cell in header_cells])
             next(formula_iterator, ())
         except StopIteration:
             headers = []
@@ -349,12 +334,8 @@ class SpreadsheetAnalysisService:
                 {
                     "name": header,
                     "inferred_type": self._infer_type(values),
-                    "sample_values": [
-                        value for value in values if value not in {None, ""}
-                    ][:5],
-                    "null_count_in_sample": sum(
-                        value is None or value == "" for value in values
-                    ),
+                    "sample_values": [value for value in values if value not in {None, ""}][:5],
+                    "null_count_in_sample": sum(value is None or value == "" for value in values),
                 }
             )
         return {
@@ -472,21 +453,13 @@ class SpreadsheetAnalysisService:
         result: list[str] = []
         counts: dict[str, int] = {}
         for index, value in enumerate(values or (), start=1):
-            base = (
-                str(value).strip()
-                if value not in {None, ""}
-                else f"column_{index}"
-            )
+            base = str(value).strip() if value not in {None, ""} else f"column_{index}"
             counts[base] = counts.get(base, 0) + 1
-            result.append(
-                base if counts[base] == 1 else f"{base}_{counts[base]}"
-            )
+            result.append(base if counts[base] == 1 else f"{base}_{counts[base]}")
         return result
 
     def _infer_type(self, values: list[Any]) -> str:
-        non_empty = [
-            value for value in values if value is not None and value != ""
-        ]
+        non_empty = [value for value in values if value is not None and value != ""]
         if not non_empty:
             return "unknown"
         if all(isinstance(value, bool) for value in non_empty):
@@ -510,9 +483,7 @@ class SpreadsheetAnalysisService:
             return str(target).lower() in str(value or "").lower()
         if operator == "in":
             candidates = target if isinstance(target, list) else [target]
-            return value in candidates or str(value) in {
-                str(item) for item in candidates
-            }
+            return value in candidates or str(value) in {str(item) for item in candidates}
 
         left_number = self._to_number(value)
         right_number = self._to_number(target)
@@ -595,11 +566,7 @@ class SpreadsheetAnalysisService:
         if function == "mean":
             return state["mean"] if state["count"] else None
         if function == "std":
-            return (
-                math.sqrt(state["m2"] / (state["count"] - 1))
-                if state["count"] > 1
-                else 0.0
-            )
+            return math.sqrt(state["m2"] / (state["count"] - 1)) if state["count"] > 1 else 0.0
         if function == "min":
             return state["min"]
         if function == "max":
@@ -616,15 +583,36 @@ class SpreadsheetAnalysisService:
         rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
         return {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
+            "chart_type": chart.type,
             "type": chart.type,
             "title": chart.title,
             "x_field": chart.x_field,
             "y_field": chart.y_field,
+            "series_field": chart.series_field,
+            "tooltip_fields": chart.tooltip_fields,
+            "x_type": chart.x_type,
+            "format": {
+                "y_unit": chart.y_unit,
+                "decimal_places": chart.decimal_places,
+            },
+            "interaction": {
+                "tooltip": True,
+                "zoom": chart.zoom,
+                "export": True,
+            },
             "data": [
                 {
-                    chart.x_field: self._json_value(row.get(chart.x_field)),
-                    chart.y_field: self._json_value(row.get(chart.y_field)),
+                    field: self._json_value(row.get(field))
+                    for field in dict.fromkeys(
+                        [
+                            chart.x_field,
+                            chart.y_field,
+                            chart.series_field,
+                            *chart.tooltip_fields,
+                        ]
+                    )
+                    if field is not None
                 }
                 for row in rows
             ],
@@ -693,11 +681,7 @@ class SpreadsheetAnalysisService:
             left_value, right_value = left_number, right_number
         else:
             left_value, right_value = str(left), str(right)
-        return (
-            left_value < right_value
-            if operator == "lt"
-            else left_value > right_value
-        )
+        return left_value < right_value if operator == "lt" else left_value > right_value
 
     def _json_value(self, value: Any) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):

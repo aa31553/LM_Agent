@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.constants import (
+    AnalysisFileStatus,
     AnalysisJobStatus,
     ConfidentialLevel,
     ErrorCode,
@@ -19,6 +20,10 @@ from app.models.analysis import AnalysisFile, AnalysisJob
 from app.models.chat import ChatSession
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobResponse, AnalysisPlan
 from app.services.audit_service import AuditService
+from app.services.dataset_query_service import (
+    DatasetQueryService,
+    execute_dataset_analysis,
+)
 from app.services.llm_service import LLMService
 from app.services.masking_service import MaskingService
 from app.services.permission_service import PermissionService
@@ -39,17 +44,69 @@ class AnalysisJobService:
         self.db = db
         self.spreadsheet_service = SpreadsheetAnalysisService()
 
-    def create(self, payload: AnalysisJobCreate, principal: Principal) -> AnalysisJob:
+    def create(
+        self,
+        payload: AnalysisJobCreate,
+        principal: Principal,
+        *,
+        draft_id: UUID | None = None,
+    ) -> AnalysisJob:
         source = self.get_analysis_file(
             payload.file_id,
             principal,
             required=PermissionLevel.WRITE,
         )
-        normalized, _warnings = self.spreadsheet_service.validate_plan(
-            source.file_path,
-            source.file_type,
-            payload.plan,
-        )
+        if source.status != AnalysisFileStatus.READY.value:
+            raise APIError(
+                ErrorCode.DOCUMENT_NOT_READY,
+                "Spreadsheet preprocessing is not complete.",
+                409,
+                details={"file_id": str(source.id), "status": source.status},
+            )
+        if payload.plan.sources:
+            if source.id not in {item.file_id for item in payload.plan.sources}:
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    "file_id must be included in AnalysisPlan.sources.",
+                    400,
+                )
+            plan_sources = [
+                self.get_analysis_file(
+                    item.file_id,
+                    principal,
+                    required=PermissionLevel.READ,
+                )
+                for item in payload.plan.sources
+            ]
+            if any(item.workspace_id != source.workspace_id for item in plan_sources):
+                raise APIError(
+                    ErrorCode.INVALID_REQUEST,
+                    "All analysis sources must belong to the same workspace.",
+                    400,
+                )
+            not_ready = [
+                str(item.id)
+                for item in plan_sources
+                if item.status != AnalysisFileStatus.READY.value or not item.dataset_manifest
+            ]
+            if not_ready:
+                raise APIError(
+                    ErrorCode.DOCUMENT_NOT_READY,
+                    "All analysis sources must finish preprocessing.",
+                    409,
+                    details={"file_ids": not_ready},
+                )
+            manifests = {str(item.id): item.dataset_manifest for item in plan_sources}
+            normalized, _warnings = DatasetQueryService().validate_plan(
+                payload.plan,
+                manifests,
+            )
+        else:
+            normalized, _warnings = self.spreadsheet_service.validate_plan(
+                source.file_path,
+                source.file_type,
+                payload.plan,
+            )
         user = AuditService(self.db).ensure_user(principal)
         session_id = payload.session_id
         if session_id is None and source.session_id is not None:
@@ -74,6 +131,7 @@ class AnalysisJobService:
             status=AnalysisJobStatus.QUEUED.value,
             progress=0,
             request_json=normalized.model_dump(mode="json"),
+            draft_id=draft_id,
         )
         self.db.add(job)
         self.db.flush()
@@ -231,6 +289,7 @@ class AnalysisJobService:
                 plan=AnalysisPlan.model_validate(original.request_json),
             ),
             principal,
+            draft_id=original.draft_id,
         )
         retry_job.retry_of_job_id = original.id
         retry_job.updated_at = datetime.utcnow()
@@ -312,6 +371,7 @@ class AnalysisJobService:
             result=job.result_json,
             error_message=job.error_message,
             retry_of_job_id=job.retry_of_job_id,
+            draft_id=job.draft_id,
             cancel_requested_at=job.cancel_requested_at,
             created_at=job.created_at,
             updated_at=job.updated_at,
@@ -380,16 +440,46 @@ def run_analysis_job(job_id: UUID) -> None:
             job.progress = max(job.progress, 10)
             job.updated_at = datetime.utcnow()
             db.commit()
-            result = run_in_process(
-                execute_spreadsheet_analysis,
-                timeout_seconds=settings.analysis_job_timeout_seconds,
-                kwargs={
+            plan = AnalysisPlan.model_validate(job.request_json)
+            if plan.sources:
+                source_ids = [item.file_id for item in plan.sources]
+                analysis_sources = list(
+                    db.scalars(select(AnalysisFile).where(AnalysisFile.id.in_(source_ids)))
+                )
+                manifests = {str(item.id): item.dataset_manifest for item in analysis_sources}
+                if len(manifests) != len(set(source_ids)) or any(
+                    not manifest for manifest in manifests.values()
+                ):
+                    raise RuntimeError("One or more preprocessed datasets are unavailable.")
+                worker = execute_dataset_analysis
+                worker_kwargs = {
+                    "plan_payload": job.request_json,
+                    "manifests": manifests,
+                }
+            else:
+                worker = execute_spreadsheet_analysis
+                worker_kwargs = {
                     "file_path": source.file_path,
                     "file_type": source.file_type,
                     "plan_payload": job.request_json,
-                },
+                }
+            result = run_in_process(
+                worker,
+                timeout_seconds=settings.analysis_job_timeout_seconds,
+                kwargs=worker_kwargs,
                 cancel_check=lambda: _analysis_job_cancelled(job_id),
             )
+            source_file_ids = (
+                [str(item.file_id) for item in plan.sources] if plan.sources else [str(source.id)]
+            )
+            for chart in result.get("charts", []):
+                chart["source"] = {
+                    "job_id": str(job.id),
+                    "file_ids": source_file_ids,
+                    "x_field": chart.get("x_field"),
+                    "y_field": chart.get("y_field"),
+                    "series_field": chart.get("series_field"),
+                }
             db.refresh(job)
             if job.status == AnalysisJobStatus.CANCELLED.value:
                 return

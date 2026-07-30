@@ -101,6 +101,10 @@ def _ensure_sqlite_schema() -> None:
                 "workspace_id": False,
                 "session_id": True,
                 "profile_path": True,
+                "dataset_manifest": True,
+                "profile_progress": False,
+                "profile_error": True,
+                "profiled_at": True,
             },
         ),
         (
@@ -109,6 +113,7 @@ def _ensure_sqlite_schema() -> None:
                 "workspace_id": False,
                 "session_id": True,
                 "result_path": True,
+                "draft_id": True,
             },
         ),
     )
@@ -143,10 +148,15 @@ def _backfill_sqlite_workspaces() -> None:
             "analysis_files": (
                 ("workspace_id", "CHAR(32)"),
                 ("profile_path", "TEXT"),
+                ("dataset_manifest", "JSON"),
+                ("profile_progress", "INTEGER NOT NULL DEFAULT 0"),
+                ("profile_error", "TEXT"),
+                ("profiled_at", "DATETIME"),
             ),
             "analysis_jobs": (
                 ("workspace_id", "CHAR(32)"),
                 ("result_path", "TEXT"),
+                ("draft_id", "CHAR(32)"),
             ),
         }
         for table_name, table_additions in additions.items():
@@ -257,8 +267,13 @@ def _validate_schema() -> None:
     if not {"owner_user_id", "visibility", "is_personal"}.issubset(workspace_columns):
         raise RuntimeError("Database schema initialization failed; workspace columns are missing.")
     for table_name, required_columns in {
-        "analysis_files": {"workspace_id", "profile_path"},
-        "analysis_jobs": {"workspace_id", "result_path"},
+        "analysis_files": {
+            "workspace_id",
+            "profile_path",
+            "dataset_manifest",
+            "profile_progress",
+        },
+        "analysis_jobs": {"workspace_id", "result_path", "draft_id"},
     }.items():
         columns = {column["name"] for column in inspector.get_columns(table_name)}
         if not required_columns.issubset(columns):

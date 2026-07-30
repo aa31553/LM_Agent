@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "LM Agent API"
-    app_version: str = "0.11.0"
+    app_version: str = "0.12.0"
     environment: str = "local"
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = [
@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     analysis_explanation_max_chars: int = Field(default=12000, ge=1000)
     analysis_retention_hours: int = Field(default=168, ge=1, le=8760)
     analysis_job_timeout_seconds: int = Field(default=1800, ge=1)
+    analysis_profile_timeout_seconds: int = Field(default=3600, ge=1)
+    analysis_profile_sample_rows: int = Field(default=50, ge=1, le=1000)
+    analysis_profile_max_columns: int = Field(default=500, ge=1, le=5000)
+    analysis_join_max_sources: int = Field(default=8, ge=2, le=20)
+    analysis_advanced_collect_max_rows: int = Field(default=500_000, ge=1)
+    analysis_chart_max_points: int = Field(default=5000, ge=10)
+    analysis_export_max_rows: int = Field(default=100_000, ge=1)
+    analysis_plan_schema_max_chars: int = Field(default=16_000, ge=1000)
+    analysis_hybrid_context_max_chars: int = Field(default=24_000, ge=2000)
 
 
 @lru_cache

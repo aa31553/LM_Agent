@@ -78,6 +78,19 @@ class AnalysisJobStatus(TextEnum):
     CANCELLED = "cancelled"
 
 
+class AnalysisFileStatus(TextEnum):
+    PROFILE_QUEUED = "profile_queued"
+    PROFILING = "profiling"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class AnalysisPlanDraftStatus(TextEnum):
+    VALIDATED = "validated"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
 class WorkspaceVisibility(TextEnum):
     PRIVATE = "private"
     SHARED = "shared"
