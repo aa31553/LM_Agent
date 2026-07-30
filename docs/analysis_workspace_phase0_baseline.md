@@ -34,7 +34,7 @@ Phase 0 adds a frozen reproduction proving that legacy chart payloads using `x`/
 fail before normalization. Phase 1 adds the compatibility behavior without weakening
 the canonical `ChartSpec`.
 
-## Windows compatibility gate
+## Windows compatibility safeguards
 
 Phase 0-1 changes must not introduce:
 
@@ -44,5 +44,6 @@ Phase 0-1 changes must not introduce:
 - changes to the Excel COM preparation lifecycle;
 - case-sensitive filesystem assumptions.
 
-The Windows CI job runs on `windows-latest` with Python 3.11 and executes the
+A supplementary Windows CI job is available on `windows-latest` with Python 3.11.
+It is not a blocking Phase 0-1 completion gate, but can be used to execute the
 baseline workspace tests plus the Phase 1 normalizer/repair tests.
