@@ -96,10 +96,24 @@ AnalysisJobStatus:
   - running
   - completed
   - failed
+  - cancelled
+AnalysisFileStatus:
+  - profile_queued
+  - profiling
+  - ready
+  - failed
+AnalysisPlanDraftStatus:
+  - validated
+  - confirmed
+  - rejected
+WorkspaceVisibility:
+  - private
+  - shared
 PermissionSubjectType:
   - user
   - role
   - department
+  - project
 PermissionLevel:
   - read
   - write
@@ -202,8 +216,8 @@ allow_list_match:
 ```yaml
 ChatQueryRequest:
   session_id: UUID|null = null
-  knowledge_base_ids: list[UUID](max_length=20) = []
-  attachment_ids: list[UUID](max_length=20) = []
+  knowledge_base_ids: list[UUID] (max_length=20) = []
+  attachment_ids: list[UUID] (max_length=20) = []
   retrieval_scope: RetrievalScope = auto
   query: string(min_length=1)
   top_k: integer(min=1,max=50,default=8)
@@ -351,35 +365,91 @@ through Chat retrieval.
 | --- | --- | --- | --- | --- |
 | POST | `/workspaces` | authenticated | `WorkspaceCreate` | `WorkspaceResponse` |
 | GET | `/workspaces` | authenticated | none | `WorkspaceListResponse` |
+| GET | `/workspaces/{workspace_id}` | workspace-read | path UUID | `WorkspaceResponse` |
+| PATCH | `/workspaces/{workspace_id}` | workspace-admin | `WorkspaceUpdate` | `WorkspaceResponse` |
+| DELETE | `/workspaces/{workspace_id}` | workspace-admin | path UUID | 204 |
 | PUT | `/workspaces/{workspace_id}/sessions/{session_id}` | workspace-read + session-owner | path UUIDs | `WorkspaceSessionLinkResponse` |
+| DELETE | `/workspaces/{workspace_id}/sessions/{session_id}` | workspace-read + session-owner | path UUIDs | `WorkspaceSessionLinkResponse` |
 | POST | `/workspaces/{workspace_id}/permissions` | workspace-admin | `WorkspacePermissionCreate` | `WorkspacePermissionResponse` |
+| GET | `/workspaces/{workspace_id}/permissions` | workspace-admin | path UUID | `WorkspacePermissionsResponse` |
+| DELETE | `/workspaces/{workspace_id}/permissions/{permission_id}` | workspace-admin | path UUIDs | 204 |
+| GET | `/workspaces/{workspace_id}/artifacts` | workspace-read | path UUID | `AnalysisArtifactListResponse` |
+| GET | `/workspaces/{workspace_id}/artifacts/{artifact_id}` | workspace-read | path UUIDs | `AnalysisArtifactResponse` |
+| GET | `/workspaces/{workspace_id}/artifacts/{artifact_id}/download` | workspace-read | path UUIDs | file stream |
 | POST | `/analysis/files/upload` | workspace-write | multipart fields | `AnalysisFileUploadResponse` |
 | GET | `/analysis/files` | workspace-read | `workspace_id` or compatible `session_id` | `AnalysisFileListResponse` |
+| GET | `/analysis/files/{file_id}` | workspace-read | path UUID | `AnalysisFileItem` |
 | GET | `/analysis/files/{file_id}/inspect` | workspace-read | path UUID | `SpreadsheetInspectionResponse` |
+| POST | `/analysis/files/{file_id}/profile/retry` | workspace-write | path UUID | `AnalysisFileUploadResponse`, HTTP 202 |
 | DELETE | `/analysis/files/{file_id}` | workspace-write | path UUID | 204 |
 | POST | `/analysis/plans/validate` | workspace-read | `AnalysisPlanValidateRequest` | `AnalysisPlanValidationResponse` |
+| POST | `/analysis/plan-drafts` | workspace-write + LLM | `AnalysisPlanDraftCreate` | `AnalysisPlanDraftResponse`, HTTP 201 |
+| GET | `/analysis/plan-drafts/{draft_id}` | workspace-read | path UUID | `AnalysisPlanDraftResponse` |
+| POST | `/analysis/plan-drafts/{draft_id}/confirm` | workspace-write | `AnalysisPlanDraftConfirmRequest` | `AnalysisJobResponse`, HTTP 202 |
 | POST | `/analysis/jobs` | workspace-write | `AnalysisJobCreate` | `AnalysisJobResponse`, HTTP 202 |
+| GET | `/analysis/jobs` | workspace-read | query filters | `AnalysisJobListResponse` |
 | GET | `/analysis/jobs/{job_id}` | workspace-read | path UUID | `AnalysisJobResponse` |
+| POST | `/analysis/jobs/{job_id}/cancel` | workspace-write | path UUID | `AnalysisJobResponse` |
+| POST | `/analysis/jobs/{job_id}/retry` | workspace-write | path UUID | `AnalysisJobResponse`, HTTP 202 |
 | POST | `/analysis/jobs/{job_id}/explain` | workspace-read | path UUID | `AnalysisExplanationResponse` |
+| POST | `/analysis/hybrid-answer` | workspace-read; workspace-write when `create_report=true` | `AnalysisHybridRequest` | `AnalysisHybridResponse` |
+| POST | `/analysis/jobs/{job_id}/export` | workspace-write | `AnalysisExportRequest` | `AnalysisArtifactCreatedResponse`, HTTP 201 |
+| POST | `/analysis/jobs/{job_id}/reports` | workspace-write | `AnalysisReportRequest` | `AnalysisArtifactCreatedResponse`, HTTP 201 |
+| POST | `/analysis/jobs/{job_id}/charts` | workspace-write | `AnalysisChartArtifactRequest` | `AnalysisArtifactCreatedResponse`, HTTP 201 |
 
 ```yaml
+WorkspaceCreate:
+  name: string(min=1,max=255)
+  description: string|null(max=4000)
+  visibility: private|shared = private
+
+WorkspaceResponse:
+  workspace_id: UUID
+  owner_user_id: UUID
+  name: string
+  description: string|null
+  visibility: private|shared
+  is_personal: boolean
+  is_active: boolean
+  permission: read|write|admin
+  session_count: integer
+  file_count: integer
+  job_count: integer
+  created_at: datetime
+  updated_at: datetime
+
+WorkspacePermissionCreate:
+  subject_type: user|role|department|project
+  subject_value: string(min=1,max=255)
+  permission: read|write|admin
+
 AnalysisFileUploadMultipart:
   file: binary(required; xlsx|csv)
-  session_id: UUID(required)
-  workspace_id: UUID(optional)
+  session_id: UUID|null
+  workspace_id: UUID|null
   confidential_level: ConfidentialLevel = internal
+  constraints:
+    - one of session_id or workspace_id is required
+    - when session_id is supplied, the backend resolves or links its Workspace
+    - when session_id is omitted, workspace_id is required and workspace-write is checked
 
 AnalysisFileUploadResponse:
   file_id: UUID
-  session_id: UUID
+  workspace_id: UUID
+  session_id: UUID|null
   filename: string
   file_type: xlsx|csv
   size_bytes: integer
-  status: ready
+  status: profile_queued|profiling|ready|failed
+  profile_progress: integer(0..100)
+  profile_error: string|null
+  dataset_count: integer
+  profiled_at: datetime|null
   expires_at: datetime|null
 
 SpreadsheetInspectionResponse:
   file_id: UUID
+  workspace_id: UUID
   filename: string
   file_type: string
   sheets:
@@ -392,6 +462,10 @@ SpreadsheetInspectionResponse:
           sample_values: list[scalar]
           null_count_in_sample: integer
       sample_rows: list[object]
+      formula_cells_in_sample: integer
+      formatted_cells_in_sample: integer
+      warnings: list[string]
+  warnings: list[string]
 
 FilterCondition:
   column: string
@@ -399,20 +473,47 @@ FilterCondition:
   value: scalar|list[scalar]|null
 
 AggregationSpec:
-  function: count|sum|mean|std|min|max|count_if
+  function: count|distinct_count|sum|mean|std|min|max|count_if|percentile
   column: string|null
   alias: string(min=1,max=128)
   condition: FilterCondition|null
+  percentile: number(0..1)|null
   constraints:
-    - column is required for sum, mean, std, min, max
+    - column is required except for count and count_if
     - condition is required for count_if
+    - percentile is required when function=percentile
 
 AnalysisPlan:
   sheet: string|null
-  select: list[string](max_length=50) = []
-  group_by: list[string](max_length=5) = []
-  filters: list[FilterCondition](max_length=20) = []
-  aggregations: list[AggregationSpec](max_length=20) = []
+  sources:
+    - file_id: UUID
+      alias: string(regex="^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+      sheet: string|null
+    max_length: 8
+  joins:
+    - left_alias: string
+      right_alias: string
+      left_on: list[string] (min=1,max=10)
+      right_on: list[string] (min=1,max=10)
+      how: inner|left|right|full = inner
+    max_length: 7
+  select: list[string] (max_length=50) = []
+  group_by: list[string] (max_length=5) = []
+  filters: list[FilterCondition] (max_length=20) = []
+  aggregations: list[AggregationSpec] (max_length=20) = []
+  date_buckets:
+    - column: string
+      unit: day|week|month|quarter|year
+      alias: string(min=1,max=128)
+    max_length: 5
+  pivot:
+    index: list[string] (min=1,max=5)
+    columns: string
+    values: string
+    aggregation: count|sum|mean|min|max = sum
+  correlation:
+    columns: list[string] (min=2,max=20)
+    method: pearson|spearman = pearson
   sort:
     - column: string
       direction: asc|desc
@@ -423,13 +524,24 @@ AnalysisPlan:
       x_field: string
       y_field: string
       title: string(max=255,default="Analysis result")
+      series_field: string|null
+      x_type: category|value|time = category
+      y_unit: string|null(max=32)
+      decimal_places: integer(0..10,default=2)
+      tooltip_fields: list[string] (max_length=20)
+      zoom: boolean = false
     max_length: 5
   constraints:
-    - select or aggregations is required
+    - select, aggregations, pivot, or correlation is required
     - raw-row sort without aggregations is rejected
     - output fields used by sort and charts must exist
+    - all sources must be ready and belong to the same Workspace
+    - every source after the first must be connected exactly once by an ordered Join
+    - join aliases and source aliases must exist and be unique
     - aggregation aliases must be unique and must not collide with group_by names;
       backend rejects duplicate aliases and aliases that collide with group_by columns
+    - date bucket aliases must be unique and must not collide with aggregation aliases
+    - pivot and correlation cannot be requested together
 
 AnalysisPlanValidateRequest:
   file_id: UUID
@@ -442,19 +554,61 @@ AnalysisPlanValidationResponse:
 
 AnalysisJobCreate:
   file_id: UUID
+  session_id: UUID|null
   plan: AnalysisPlan
 
 AnalysisJobResponse:
   job_id: UUID
-  session_id: UUID
+  workspace_id: UUID
+  session_id: UUID|null
   file_id: UUID
-  status: queued|running|completed|failed
+  status: queued|running|completed|failed|cancelled
   plan: AnalysisPlan
+  progress: integer(0..100)
   result: object|null
   error_message: string|null
+  retry_of_job_id: UUID|null
+  draft_id: UUID|null
+  cancel_requested_at: datetime|null
   created_at: datetime
   updated_at: datetime
   finished_at: datetime|null
+
+AnalysisJobListQuery:
+  workspace_id: UUID|null
+  session_id: UUID|null
+  file_id: UUID|null
+  status: AnalysisJobStatus|null
+  page: integer(min=1,default=1)
+  page_size: integer(min=1,max=200,default=50)
+  constraints:
+    - workspace_id or session_id is required
+
+AnalysisPlanDraftCreate:
+  workspace_id: UUID
+  question: string(min=2,max=4000)
+  file_ids: list[UUID] (min=1,max=8)
+  session_id: UUID|null
+
+AnalysisPlanDraftResponse:
+  draft_id: UUID
+  workspace_id: UUID
+  session_id: UUID|null
+  question: string
+  file_ids: list[UUID]
+  plan: AnalysisPlan
+  warnings: list[string]
+  status: validated|confirmed|rejected
+  confirmation_required: true
+  usage: LLMUsage
+  created_at: datetime
+  confirmed_at: datetime|null
+
+AnalysisPlanDraftConfirmRequest:
+  plan: AnalysisPlan|null
+  behavior:
+    - null confirms the validated draft plan
+    - a supplied edited plan is validated again before a Job is queued
 
 AnalysisResult:
   summary:
@@ -464,14 +618,22 @@ AnalysisResult:
     returned_rows: integer
     truncated: boolean
     warnings: list[string]
+    query_engine: string|null
   table:
     columns: list[{key: string, label: string}]
     rows: list[object]
   charts:
-    - type: bar|line|scatter
+    - schema_version: "1.0"|"2.0"
+      type: bar|line|scatter
       title: string
       x_field: string
       y_field: string
+      series_field: string|null
+      x_type: category|value|time
+      y_unit: string|null
+      decimal_places: integer
+      tooltip_fields: list[string]
+      zoom: boolean
       data: list[object]
   plan: AnalysisPlan
 
@@ -479,11 +641,85 @@ AnalysisExplanationResponse:
   job_id: UUID
   answer: string
   usage: LLMUsage
+
+AnalysisHybridRequest:
+  workspace_id: UUID
+  question: string(min=2,max=4000)
+  analysis_job_ids: list[UUID] (min=1,max=10)
+  knowledge_base_ids: list[UUID] (max=20) = []
+  top_k: integer(min=1,max=30,default=8)
+  use_rerank: boolean = true
+  create_report: boolean = true
+
+AnalysisHybridResponse:
+  workspace_id: UUID
+  answer: string
+  analysis_job_ids: list[UUID]
+  citations: list[Citation]
+  report_artifact_id: UUID|null
+  usage: LLMUsage
+
+AnalysisExportRequest:
+  format: csv|json|parquet = csv
+  filename: string|null(max=255)
+
+AnalysisReportRequest:
+  title: string(min=1,max=255,default="Analysis report")
+  include_result_rows: boolean = true
+  max_rows: integer(min=1,max=5000,default=200)
+
+AnalysisChartArtifactRequest:
+  chart_index: integer(min=0,default=0)
+  filename: string|null(max=255)
+
+AnalysisArtifactCreatedResponse:
+  artifact_id: UUID
+  workspace_id: UUID
+  job_id: UUID
+  artifact_type: string
+  filename: string
+  mime_type: string
+  size_bytes: integer
+
+AnalysisArtifactResponse:
+  artifact_id: UUID
+  workspace_id: UUID
+  file_id: UUID|null
+  job_id: UUID|null
+  artifact_type: string
+  filename: string
+  mime_type: string|null
+  size_bytes: integer
+  metadata: object
+  created_at: datetime
 ```
 
 Defaults: upload 500 MB, scan 5,000,000 rows, 5,000 groups, return 5,000 rows,
-20 inspect samples, 1,800-second job timeout, 168-hour retention. The dedicated
-worker command is `python -m app.workers.analysis_tasks`.
+50 background profile samples (20 for legacy synchronous inspect), 3,600-second
+profile timeout, 1,800-second Job timeout,
+500,000 advanced collect rows, 5,000 chart points, and 100,000 export rows.
+Workspace files are persistent by default; `ANALYSIS_RETENTION_HOURS=168` applies
+only to legacy rows that have an explicit expiry. The dedicated worker command is
+`python -m app.workers.analysis_tasks`.
+
+Execution boundary:
+
+```yaml
+natural_language_path:
+  - POST /analysis/plan-drafts
+  - backend validates model JSON against actual Parquet schemas
+  - user reviews the normalized plan
+  - POST /analysis/plan-drafts/{draft_id}/confirm
+  - confirm creates exactly one queued Job
+direct_plan_path:
+  - POST /analysis/plans/validate
+  - POST /analysis/jobs with normalized_plan
+forbidden:
+  - model-generated Python execution
+  - model-generated SQL execution
+  - model-generated JavaScript execution
+  - user-supplied filesystem or Parquet paths
+```
 
 ### 4.5 Knowledge Bases
 
@@ -626,8 +862,12 @@ HTTP mapping is route-dependent. Common mappings:
 403: PERMISSION_DENIED
 404:
   - DOCUMENT_NOT_FOUND
+  - ANALYSIS_NOT_FOUND
   - SKILL_NOT_FOUND
   - INVALID_REQUEST for selected missing session/permission resources
+409:
+  - DOCUMENT_NOT_READY for spreadsheet profiling or unfinished analysis prerequisites
+  - INVALID_REQUEST for illegal Job state transitions or Session/Workspace conflicts
 400:
   - INVALID_REQUEST
   - DLP_BLOCKED
@@ -651,8 +891,12 @@ must:
   - serialize UUID values as strings
   - repeat knowledge_base_ids query keys for list[UUID] LLMWiki inputs
   - poll document status until ready or failed before RAG use
+  - poll analysis file status until ready or failed before inspect, validate, or Job creation
   - validate AnalysisPlan before creating an analysis job
-  - poll analysis job status until completed or failed before reading result
+  - show and explicitly confirm a natural-language AnalysisPlanDraft before execution
+  - treat draft confirmation as Job creation; do not create the same Job again
+  - poll analysis job status until completed, failed, or cancelled before reading result
+  - use workspace_id when an analysis upload has no session_id
   - preserve X-Request-ID across a logical operation when tracing is needed
 must_not:
   - invent request fields
@@ -660,7 +904,9 @@ must_not:
   - send session_id together with scope=knowledge_base
   - send unready attachment IDs to Chat
   - treat analysis uploads as RAG documents
-  - execute model-generated Python or SQL for spreadsheet analysis
+  - execute model-generated Python, SQL, or JavaScript for spreadsheet analysis
+  - send filesystem or Parquet paths in AnalysisPlan
+  - use analysis sources from different Workspaces
   - claim cross-department access is always denied
   - expose or infer documents removed by permission filtering
   - fabricate citations in general LLM mode

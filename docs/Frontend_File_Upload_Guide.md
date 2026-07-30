@@ -406,18 +406,33 @@ async function uploadKnowledgeBaseDocument(
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Uploaded: upload
-    Uploaded --> Inspected: inspect
-    Inspected --> Validated: validate plan
-    Validated --> Queued: create job
+    [*] --> ProfileQueued: upload
+    ProfileQueued --> Profiling: worker claims
+    Profiling --> Ready: profile + Parquet
+    Profiling --> ProfileFailed: conversion error
+    ProfileFailed --> ProfileQueued: retry
+    Ready --> Inspected: inspect
+    Inspected --> Reviewed: validate or confirm draft
+    Reviewed --> Queued: create job
     Queued --> Running: worker claims
     Running --> Completed: result ready
     Running --> Failed: execution error
+    Queued --> Cancelled: cancel
+    Running --> Cancelled: cancel
+    Failed --> Queued: retry creates new Job
+    Cancelled --> Queued: retry creates new Job
     Completed --> Explained: optional LLM explanation
 ```
 
-分析檔上傳時 `session_id` 必填。前端可使用既有 general Session ID，或先以
-`crypto.randomUUID()` 建立 ID；後端在該 ID 尚不存在時會建立 Session。
+分析檔上傳有兩種歸屬方式：
+
+- Session 模式：傳入 `session_id`；若 Session 尚未連結 Workspace，後端會建立或
+  沿用使用者的私人 Workspace。
+- Workspace 模式：不傳 Session，但 `workspace_id` 必填。
+
+若同時傳入兩者，Session 不得已連到其他 Workspace。前端可透過
+`GET /workspaces` 顯示可用工作區，並以回覆的 `permission` 決定 UI：read 只能查看，
+write 可上傳、執行與建立 artifact，admin 可管理 Workspace 與分享規則。
 
 ### 5.2 上傳分析檔
 
@@ -425,24 +440,30 @@ stateDiagram-v2
 type AnalysisFileUploadResponse = {
   file_id: string;
   workspace_id: string;
-  session_id: string;
+  session_id: string | null;
   filename: string;
   file_type: "xlsx" | "csv";
   size_bytes: number;
-  status: "ready";
+  status: "profile_queued" | "profiling" | "ready" | "failed";
+  profile_progress: number;
+  profile_error: string | null;
+  dataset_count: number;
+  profiled_at: string | null;
   expires_at: string | null;
 };
 
 async function uploadAnalysisFile(
   file: File,
-  sessionId: string,
   token: string,
-  workspaceId?: string,
+  target: { sessionId?: string; workspaceId?: string },
 ): Promise<AnalysisFileUploadResponse> {
+  if (!target.sessionId && !target.workspaceId) {
+    throw new Error("sessionId or workspaceId is required");
+  }
   const form = new FormData();
   form.append("file", file);
-  form.append("session_id", sessionId);
-  if (workspaceId) form.append("workspace_id", workspaceId);
+  if (target.sessionId) form.append("session_id", target.sessionId);
+  if (target.workspaceId) form.append("workspace_id", target.workspaceId);
   form.append("confidential_level", "internal");
 
   return apiJson<AnalysisFileUploadResponse>(
@@ -461,7 +482,7 @@ async function uploadAnalysisFile(
 | 可掃描資料列 | 5,000,000 |
 | 最大群組數 | 5,000 |
 | 回傳資料列 | 5,000 |
-| Inspect 樣本列 | 20 |
+| 背景 Profile 樣本列 | 50（舊同步 inspect fallback 為 20） |
 | Job timeout | 1,800 秒 |
 | Workspace 檔案保存期限 | 預設持久保存 |
 
@@ -523,12 +544,16 @@ const validation = await apiJson<{
 
 前端建立計畫時必須遵守：
 
-- `select` 或 `aggregations` 至少一個非空。
+- `select`、`aggregations`、`pivot`、`correlation` 至少一項。
 - `group_by` 最多 5 欄，filters 與 aggregations 各最多 20 筆。
 - filter operator：`eq`、`ne`、`gt`、`gte`、`lt`、`lte`、`contains`、`in`、
   `is_null`、`not_null`。
-- aggregation：`count`、`sum`、`mean`、`std`、`min`、`max`、`count_if`。
+- aggregation：`count`、`distinct_count`、`sum`、`mean`、`std`、`min`、`max`、
+  `count_if`、`percentile`；percentile 使用 `0..1`，中位數為 `0.5`。
 - chart：`bar`、`line`、`scatter`，最多 5 張。
+- `sources` 最多 8 個，`joins` 最多 7 個；所有檔案必須屬於同一 Workspace。
+- date bucket 支援 `day`、`week`、`month`、`quarter`、`year`。
+- Pivot 與 correlation 不能同時使用；correlation 支援 Pearson、Spearman。
 - 無 aggregation 時目前不支援 raw rows 排序。
 - 有 aggregation 時，`select` 會被忽略，輸出欄位來自 `group_by` 與 aggregation alias。
 - 每個 aggregation alias 必須唯一，也不得與 `group_by` 欄名相同；前後端皆應檢查，
@@ -539,12 +564,17 @@ const validation = await apiJson<{
 ```ts
 type AnalysisJobResponse = {
   job_id: string;
-  session_id: string;
+  workspace_id: string;
+  session_id: string | null;
   file_id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   plan: Record<string, unknown>;
+  progress: number;
   result: AnalysisResult | null;
   error_message: string | null;
+  retry_of_job_id: string | null;
+  draft_id: string | null;
+  cancel_requested_at: string | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -573,7 +603,7 @@ async function waitUntilAnalysisFinished(
       token,
     );
     if (state.status === "completed") return state;
-    if (state.status === "failed") {
+    if (state.status === "failed" || state.status === "cancelled") {
       throw new Error(state.error_message ?? "Analysis failed.");
     }
     await delay(1500);
@@ -600,16 +630,24 @@ type AnalysisResult = {
     returned_rows: number;
     truncated: boolean;
     warnings: string[];
+    query_engine?: string;
   };
   table: {
     columns: Array<{ key: string; label: string }>;
     rows: Array<Record<string, unknown>>;
   };
   charts: Array<{
+    schema_version: "1.0" | "2.0";
     type: "bar" | "line" | "scatter";
     title: string;
     x_field: string;
     y_field: string;
+    series_field?: string | null;
+    x_type?: "category" | "value" | "time";
+    y_unit?: string | null;
+    decimal_places?: number;
+    tooltip_fields?: string[];
+    zoom?: boolean;
     data: Array<Record<string, unknown>>;
   }>;
   plan: Record<string, unknown>;
@@ -718,6 +756,12 @@ scatter，不執行 API 或 LLM 回傳的 JavaScript。
 XLSX Sheet 數量。`failed` 時顯示 `profile_error`，並讓使用者呼叫
 `POST /api/v1/analysis/files/{file_id}/profile/retry`。
 
+不要在收到 upload response 後立刻呼叫 inspect；尚未完成時會回傳 HTTP 409
+`DOCUMENT_NOT_READY`，`details` 會包含 `status`、`progress` 與 `error`。
+
+大型資料前端不接收原始 Parquet 路徑。所有 Join 與欄位選擇只傳 `file_id`、
+Sheet 名與 alias，後端從受控 `dataset_manifest` 解析實體路徑。
+
 ### 5.12 自然語言草稿與確認
 
 ```http
@@ -743,13 +787,60 @@ POST /api/v1/analysis/plan-drafts/{draft_id}/confirm
 ```
 
 confirm 前不會建立 Job。若前端傳入編輯後的 `plan`，後端會重新以實際 Parquet
-schema 驗證。
+schema 驗證。confirm 成功回傳 HTTP 202 `AnalysisJobResponse`，代表 Job 已建立；
+此路徑不需要再呼叫 `POST /analysis/jobs`。
+
+多 Sheet／多檔計畫範例：
+
+```json
+{
+  "sources": [
+    {"file_id": "PRODUCTION_FILE_UUID", "alias": "p", "sheet": "Production"},
+    {"file_id": "MACHINE_FILE_UUID", "alias": "m", "sheet": "Machines"}
+  ],
+  "joins": [
+    {
+      "left_alias": "p",
+      "right_alias": "m",
+      "left_on": ["Machine"],
+      "right_on": ["Machine"],
+      "how": "left"
+    }
+  ],
+  "date_buckets": [
+    {"column": "p.Date", "unit": "month", "alias": "month"}
+  ],
+  "group_by": ["month", "m.Line"],
+  "aggregations": [
+    {
+      "function": "percentile",
+      "column": "p.Yield",
+      "percentile": 0.5,
+      "alias": "median_yield"
+    }
+  ],
+  "charts": [
+    {
+      "type": "line",
+      "x_field": "month",
+      "y_field": "median_yield",
+      "series_field": "m.Line",
+      "x_type": "time",
+      "y_unit": "%",
+      "zoom": true
+    }
+  ]
+}
+```
 
 ### 5.13 Hybrid 與成果管理
 
 `POST /api/v1/analysis/hybrid-answer` 同時接收 `analysis_job_ids` 與
 `knowledge_base_ids`。回覆保留 KB citations 與 `report_artifact_id`。分析結果是
 不可修改的數據事實，KB 片段只用於 SOP、定義與背景解釋。
+
+`create_report=true` 會在 Workspace 建立 Markdown artifact，因此要求 write 權限；
+若只需要回答且使用者只有 read，請送出 `create_report=false`。
 
 完成 Job 可建立下列 artifact：
 

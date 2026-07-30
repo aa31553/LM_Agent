@@ -84,7 +84,13 @@ admin
 - `clearance_level`：可讀機密等級。
 - `roles`：角色集合。
 
-知識庫與文件權限支援三種對象：`user`、`department`、`role`；權限值為 `read`、`write`、`admin`，目前讀取判斷接受 `read` 或 `admin`。
+知識庫與文件權限支援三種對象：`user`、`department`、`role`；權限值為
+`read`、`write`、`admin`，目前讀取判斷接受 `read` 或 `admin`。
+
+Workspace 另有獨立分享規則，subject 支援 `user`、`department`、`role`、`project`，
+並採 `read < write < admin` 層級。Workspace 擁有者、系統管理員固定具有 admin；
+一般成員必須明確命中分享規則。即使 Workspace 可讀，分析檔仍需通過
+`confidential_level` 機密等級檢查。
 
 實際讀取規則：
 
@@ -207,16 +213,26 @@ DELETE /api/v1/chat/sessions/{session_id}
 2. `POST /api/v1/analysis/files/upload`
 3. `GET /api/v1/analysis/files/{file_id}` 輪詢背景 profiling 至 `ready`
 4. `GET /api/v1/analysis/files/{file_id}/inspect`
-5. 建立 `AnalysisPlan`，或呼叫 `POST /api/v1/analysis/plan-drafts`
-6. 自然語言草稿須呼叫 `/analysis/plan-drafts/{draft_id}/confirm`
-7. `POST /api/v1/analysis/jobs`
-8. `GET /api/v1/analysis/jobs/{job_id}` 輪詢至 `completed` 或 `failed`
-9. 直接渲染 `result.table` 與 `result.charts`
-10. 可呼叫 `hybrid-answer`、`export`、`reports`、`charts` 管理成果
+5. 選擇一條計畫路徑：
+   - 前端建立：`POST /analysis/plans/validate` 後呼叫 `POST /analysis/jobs`
+   - 自然語言：`POST /analysis/plan-drafts`，人工檢查後呼叫
+     `/analysis/plan-drafts/{draft_id}/confirm`
+6. 輪詢 `GET /api/v1/analysis/jobs/{job_id}` 至
+   `completed`、`failed` 或 `cancelled`
+7. 直接渲染 `result.table` 與 `result.charts`
+8. 可呼叫 `hybrid-answer`、`export`、`reports`、`charts` 管理成果
+
+草稿的 `confirm` API 會直接建立 Job；走自然語言路徑時不要再呼叫一次
+`POST /analysis/jobs`。分析上傳可採：
+
+- Session 模式：傳 `session_id`，可選擇同時傳 `workspace_id`。
+- Workspace 模式：不傳 Session，但 `workspace_id` 必填。
 
 分析檔不會建立 chunk 或 Embedding，也不會進入知識庫。後端只執行白名單
-`AnalysisPlan`，不執行 LLM 產生的 Python 或 SQL；31B LLM 只產生待確認的受限 JSON
-或解釋已完成結果。XLSX 每個 Sheet 會在背景轉為 Parquet，查詢使用 DuckDB／Polars。
+`AnalysisPlan`，不執行 LLM 產生的 Python、SQL 或 JavaScript；31B LLM 只產生
+待確認的受限 JSON 或解釋已完成結果。XLSX 每個 Sheet 會在背景轉為 Parquet，
+查詢使用 DuckDB／Polars。支援多 Sheet／多檔 Join、日期彙總、Pivot、
+distinct count、percentile、Pearson／Spearman correlation。
 同一 Workspace 的不同 Session 可重複使用同一個 `file_id`，不需重新上傳。
 完整請求、回應與 TypeScript 範例請見
 [前端檔案上傳與分析串接指南](Frontend_File_Upload_Guide.md)。
@@ -330,7 +346,8 @@ LLM 測試不啟動 RAG、LLMWiki 或資料庫 Session，適合單獨確認 Open
 | Health | 系統與相依服務健康狀態 | 公開 |
 | Chat | 問答、SSE、Session 訊息、附件管理與刪除 | 已驗證使用者 |
 | Documents | 格式、上傳、列表、狀態、明細與 CRUD | 已驗證；異動依文件 write/manage 權限 |
-| Analysis | XLSX／CSV 上傳、inspect、計畫、Job、結果與解說 | Session 擁有者或 admin |
+| Workspaces | 分析資料歸屬、Session 關聯、分享權限與成果 | read／write／admin |
+| Analysis | 上傳、profiling、計畫、Job、Hybrid、報告與匯出 | Workspace 權限 + 機密等級 |
 | Knowledge Bases | 建立與列出可存取知識庫 | 已驗證使用者 |
 | Skills | Skill 列表、明細與檔案預覽 | 已驗證；異動僅 admin |
 | LLMWiki | 搜尋、編譯、索引、圖、lint、operations | demo 公開，其餘已驗證 |

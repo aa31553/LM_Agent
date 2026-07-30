@@ -102,17 +102,27 @@ is checked in addition to Workspace membership.
 
 ## Spreadsheet analysis workflow
 
-1. Upload an XLSX or CSV file.
-2. The analysis worker profiles the source and converts every Sheet to Parquet.
-3. Poll the file until `status=ready`, then inspect schemas and samples.
-4. Build an `AnalysisPlan`, or ask the LLM to create a constrained plan draft.
-5. Validate and explicitly confirm the plan draft.
-6. Create a queued analysis job.
-7. Run `python -m app.workers.analysis_tasks` in a separate process.
-8. Poll the job until it is completed, failed, or cancelled.
-9. Render the returned table and Chart Schema through the ECharts Adapter.
-10. Optionally combine completed results with authorized KB evidence.
-11. Save reports, chart specifications, and exports as managed artifacts.
+```mermaid
+flowchart TD
+    A["Select Workspace"] --> B["Upload XLSX or CSV"]
+    B --> C["Profile and convert to Parquet"]
+    C --> D["Inspect schema and samples"]
+    D --> E{"Plan source"}
+    E -->|Frontend JSON| F["Validate plan"]
+    E -->|Natural language| G["Create constrained draft"]
+    G --> H["User confirms or edits"]
+    F --> I["Queue Job"]
+    H --> I
+    I --> J["Run deterministic analysis"]
+    J --> K["Table and Chart Schema"]
+    K --> L["Render, export, or report"]
+    K --> M["Optional Hybrid KB answer"]
+```
+
+The paths after inspection are alternatives. A direct frontend plan uses
+`plans/validate` and then `POST /analysis/jobs`. A natural-language plan uses
+`plan-drafts` and `plan-drafts/{draft_id}/confirm`; the confirmation request itself
+creates and returns the queued Job, so the frontend must not create a second Job.
 
 ### Routes
 
@@ -149,7 +159,8 @@ is checked in addition to Workspace membership.
 - Filter: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `in`,
   `is_null`, `not_null`
 - Group by up to five columns
-- Aggregate: `count`, `sum`, `mean`, sample `std`, `min`, `max`, `count_if`
+- Aggregate: `count`, `distinct_count`, `sum`, `mean`, sample `std`, `min`,
+  `max`, `count_if`, `percentile`
 - Sort aggregated output
 - Generate bar, line, or scatter chart payloads
 - Join up to eight preprocessed Sheets/files with explicit keys
@@ -158,7 +169,7 @@ is checked in addition to Workspace membership.
 - Pivot/cross table
 - Pearson or Spearman correlation matrix
 
-The backend never executes model-generated Python or SQL. Unknown columns,
+The backend never executes model-generated Python, SQL, or JavaScript. Unknown columns,
 incompatible numeric operations, unsupported output fields, oversized row counts,
 and excessive group counts are rejected before or during execution.
 
@@ -231,10 +242,12 @@ or failed. Cancelling a running job updates the database immediately and the wor
 terminates its child process on the next cancellation poll. Retry creates a new job
 with `retry_of_job_id`; it never mutates or erases the original attempt.
 
-Chart payloads include `schema_version: "1.0"` and retain the compatible
-`type`, `title`, `x_field`, `y_field`, and `data` fields. The frontend loads a local
-ECharts runtime and `frontend/echarts-adapter.js`, which turns only the approved
-bar, line, and scatter payloads into ECharts options. No model-generated
+Legacy chart payloads use `schema_version: "1.0"`; advanced dataset plans use
+`schema_version: "2.0"` and can add `series_field`, `x_type`, `y_unit`,
+`decimal_places`, `tooltip_fields`, and `zoom`. Both retain the compatible
+`type`, `title`, `x_field`, `y_field`, and `data` fields. The frontend loads a
+local ECharts runtime and `frontend/echarts-adapter.js`, which turns only the
+approved bar, line, and scatter payloads into ECharts options. No model-generated
 JavaScript is evaluated.
 
 The LLM explanation endpoint receives only bounded result JSON. Its fixed prompt
@@ -324,4 +337,6 @@ python -m app.db.init_db
 
 The additive phase-two migration creates private Workspaces for existing users,
 links existing Sessions, backfills `workspace_id`, clears legacy spreadsheet
-expiry, and changes Session foreign keys to `ON DELETE SET NULL`.
+expiry, and changes Session foreign keys to `ON DELETE SET NULL`. The phase-three
+and phase-four migration adds dataset manifests, profiling state, plan drafts,
+artifact metadata, and result paths without removing the compatible Session APIs.

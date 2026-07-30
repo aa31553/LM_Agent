@@ -9,7 +9,7 @@
 
 # 文件二：FastAPI API 規格書
 
-> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.11.0`；
+> 適用分支：`codex/session-analysis-workspace`；API 版本：`0.12.0`；
 > 更新日期：2026-07-30。
 >
 > LLM / agent 讀取入口：本文件描述語意與生命週期；執行時的機器可讀 schema 為
@@ -36,6 +36,7 @@
 | Chat            | `/api/v1/chat`            | 問答相關   |
 | Code Chat       | `/api/v1/code-chat`       | 程式碼問答 |
 | Documents       | `/api/v1/documents`       | 文件管理   |
+| Workspaces      | `/api/v1/workspaces`      | 分析資料持久歸屬與分享 |
 | Analysis        | `/api/v1/analysis`        | XLSX／CSV 確定性分析 |
 | Skills          | `/api/v1/skills`          | Skill 管理 |
 | Knowledge Bases | `/api/v1/knowledge-bases` | 知識庫管理  |
@@ -667,31 +668,91 @@ Response:
 ## 8. Analysis API
 
 Analysis API 專門處理不進入知識庫的 `.xlsx`／`.csv` 精確分析。資料以 Workspace
-為持久主要歸屬，Chat Session 僅記錄操作來源。它不建立文件
-chunk 或 Embedding；後端依白名單 `AnalysisPlan` 執行確定性計算，LLM 僅能選擇性
-解釋已完成的結果。
+為持久主要歸屬，Chat Session 僅記錄操作來源。它不建立文件 chunk 或 Embedding；
+後端只執行受限 `AnalysisPlan`，LLM 只能產生待確認的 JSON 草稿或解釋後端已完成的
+結果，不執行模型產生的 Python、SQL 或 JavaScript。
 
-### 8.1 前端流程
+### 8.1 整體流程
 
-| 步驟 | Method | Route | 說明 |
-| --- | --- | --- | --- |
-| 1 | POST | `/api/v1/analysis/files/upload` | multipart 上傳；`session_id` 必填，`workspace_id` 可選 |
-| 2 | GET | `/api/v1/analysis/files/{file_id}/inspect` | 取得 sheet、欄位、型別與樣本 |
-| 3 | POST | `/api/v1/analysis/plans/validate` | 驗證並正規化計畫 |
-| 4 | POST | `/api/v1/analysis/jobs` | 建立 Job，HTTP 202 |
-| 5 | GET | `/api/v1/analysis/jobs/{job_id}` | 輪詢 `queued/running/completed/failed` |
-| 6 | POST | `/api/v1/analysis/jobs/{job_id}/explain` | 完成後可選擇由 LLM 解說 |
-| 管理 | GET | `/api/v1/analysis/files?workspace_id=...` | 列出 Workspace 分析檔 |
-| 相容 | GET | `/api/v1/analysis/files?session_id=...` | 解析 Session 所連結的 Workspace |
-| 管理 | DELETE | `/api/v1/analysis/files/{file_id}` | 刪除檔案及其 Jobs |
+```mermaid
+flowchart TD
+    A["建立／選擇 Workspace"] --> B["上傳 XLSX／CSV"]
+    B --> C["背景 Profiling 與 Parquet 轉換"]
+    C --> D["Inspect Schema 與樣本"]
+    D --> E{"計畫來源"}
+    E -->|前端建立| F["Validate AnalysisPlan"]
+    E -->|自然語言| G["產生受限 PlanDraft"]
+    G --> H["使用者確認／編輯"]
+    F --> I["建立 Job"]
+    H --> I
+    I --> J["Worker 執行 DuckDB／Polars 分析"]
+    J --> K["Table／Chart Schema"]
+    K --> L["ECharts／報表／匯出"]
+    K --> M["Hybrid KB 回答"]
+```
 
-分析 Worker 必須獨立啟動：
+直接計畫與自然語言草稿是兩條替代路徑：
+
+- 直接計畫：`plans/validate` 成功後，由前端呼叫 `POST /analysis/jobs`。
+- 自然語言：`plan-drafts/{draft_id}/confirm` 本身會建立並回傳 Job，不可再重複呼叫
+  `POST /analysis/jobs`。
+
+分析 Worker 必須獨立於 Uvicorn 啟動：
 
 ```bash
 python -m app.workers.analysis_tasks
 ```
 
-### 8.2 上傳
+### 8.2 Workspace 與權限
+
+Workspace 持有原檔、profile、Parquet datasets、Job、result 與 artifact。Session
+可以連結 Workspace，但刪除 Session 只解除關聯，不刪除 Workspace 資料。
+
+| Method | Route | 權限 | 說明 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/workspaces` | authenticated | 建立 Workspace |
+| GET | `/api/v1/workspaces` | authenticated | 列出可讀 Workspace |
+| GET | `/api/v1/workspaces/{workspace_id}` | read | 查詢資訊與 Session／檔案／Job 數量 |
+| PATCH | `/api/v1/workspaces/{workspace_id}` | admin | 更新名稱、說明、可見性或啟用狀態 |
+| DELETE | `/api/v1/workspaces/{workspace_id}` | admin | 刪除 Workspace 與全部分析資料 |
+| PUT | `/api/v1/workspaces/{workspace_id}/sessions/{session_id}` | read + Session owner | 連結或移動 Session |
+| DELETE | `/api/v1/workspaces/{workspace_id}/sessions/{session_id}` | read + Session owner | 解除 Session |
+| POST | `/api/v1/workspaces/{workspace_id}/permissions` | admin | 新增或更新分享權限 |
+| GET | `/api/v1/workspaces/{workspace_id}/permissions` | admin | 列出分享權限 |
+| DELETE | `/api/v1/workspaces/{workspace_id}/permissions/{permission_id}` | admin | 刪除分享權限 |
+| GET | `/api/v1/workspaces/{workspace_id}/artifacts` | read | 列出成果 |
+| GET | `/api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}` | read | 取得成果 metadata |
+| GET | `/api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}/download` | read | 下載成果 |
+
+Workspace permission subject 支援 `user`、`department`、`role`、`project`，權限層級為
+`read < write < admin`。此外仍會檢查分析檔的 `confidential_level`。
+
+### 8.3 端點索引
+
+| 階段 | Method | Route | 回應 |
+| --- | --- | --- | --- |
+| 上傳 | POST | `/api/v1/analysis/files/upload` | `AnalysisFileUploadResponse` |
+| 檔案列表 | GET | `/api/v1/analysis/files?workspace_id=...` | `AnalysisFileListResponse` |
+| Session 相容列表 | GET | `/api/v1/analysis/files?session_id=...` | `AnalysisFileListResponse` |
+| Profiling 狀態 | GET | `/api/v1/analysis/files/{file_id}` | `AnalysisFileItem` |
+| Inspect | GET | `/api/v1/analysis/files/{file_id}/inspect` | `SpreadsheetInspectionResponse` |
+| Profiling 重試 | POST | `/api/v1/analysis/files/{file_id}/profile/retry` | HTTP 202 |
+| 刪除檔案 | DELETE | `/api/v1/analysis/files/{file_id}` | HTTP 204 |
+| 驗證計畫 | POST | `/api/v1/analysis/plans/validate` | `AnalysisPlanValidationResponse` |
+| 建立草稿 | POST | `/api/v1/analysis/plan-drafts` | HTTP 201 |
+| 查詢草稿 | GET | `/api/v1/analysis/plan-drafts/{draft_id}` | `AnalysisPlanDraftResponse` |
+| 確認草稿 | POST | `/api/v1/analysis/plan-drafts/{draft_id}/confirm` | HTTP 202 + Job |
+| 建立 Job | POST | `/api/v1/analysis/jobs` | HTTP 202 |
+| Job 列表 | GET | `/api/v1/analysis/jobs` | 分頁 `AnalysisJobListResponse` |
+| Job 狀態 | GET | `/api/v1/analysis/jobs/{job_id}` | `AnalysisJobResponse` |
+| 取消／重試 | POST | `/api/v1/analysis/jobs/{job_id}/cancel`、`retry` | Job |
+| 結果解說 | POST | `/api/v1/analysis/jobs/{job_id}/explain` | LLM 解說與 usage |
+| Hybrid | POST | `/api/v1/analysis/hybrid-answer` | 分析事實 + KB citations |
+| 匯出 | POST | `/api/v1/analysis/jobs/{job_id}/export` | CSV／JSON／Parquet artifact |
+| 報告 | POST | `/api/v1/analysis/jobs/{job_id}/reports` | Markdown artifact |
+| 圖表 | POST | `/api/v1/analysis/jobs/{job_id}/charts` | Chart Schema artifact |
+
+### 8.4 上傳、Profiling 與 Inspect
 
 ```http
 POST /api/v1/analysis/files/upload
@@ -701,11 +762,14 @@ Content-Type: multipart/form-data
 | 欄位 | 型別 | 必填 | 說明 |
 | --- | --- | --- | --- |
 | `file` | binary | 是 | 只接受 `.xlsx`、`.csv` |
-| `session_id` | UUID | 是 | Session 擁有者或 admin |
-| `workspace_id` | UUID | 否 | 省略時自動使用私人 Workspace |
+| `session_id` | UUID | 條件式 | 有 Session 時傳入；後端會解析或建立私人 Workspace 關聯 |
+| `workspace_id` | UUID | 條件式 | 不傳 `session_id` 時必填；要求 Workspace write |
 | `confidential_level` | enum | 否 | 預設 `internal` |
 
-Response：
+`session_id` 與 `workspace_id` 至少提供一個。兩者同時存在時，Session 必須尚未連結
+其他 Workspace，且呼叫者必須同時擁有 Session 與 Workspace 權限。
+
+上傳回應只是排入背景 profiling：
 
 ```json
 {
@@ -715,37 +779,77 @@ Response：
   "filename": "production.xlsx",
   "file_type": "xlsx",
   "size_bytes": 182400,
-  "status": "ready",
+  "status": "profile_queued",
+  "profile_progress": 0,
+  "profile_error": null,
+  "dataset_count": 0,
+  "profiled_at": null,
   "expires_at": null
 }
 ```
 
-### 8.3 AnalysisPlan
+前端輪詢 `GET /api/v1/analysis/files/{file_id}`。狀態為：
+
+```text
+profile_queued -> profiling -> ready
+                              -> failed
+```
+
+只有 `ready` 可 inspect 或建立 Job。XLSX 每個 Sheet 轉為獨立 Parquet，CSV 轉為單一
+`CSV` dataset；原檔保持不變。公式只讀取 Excel 最後儲存的快取值，不執行 VBA，
+顯示格式也不會原樣帶入分析結果。Inspect 的 response 與 Sheet 都會回傳 `warnings`。
+
+### 8.5 AnalysisPlan
 
 ```json
 {
   "file_id": "<FILE_UUID>",
   "plan": {
-    "sheet": "Production",
+    "sources": [
+      {"file_id": "<PRODUCTION_FILE_UUID>", "alias": "p", "sheet": "Production"},
+      {"file_id": "<MACHINE_FILE_UUID>", "alias": "m", "sheet": "Machines"}
+    ],
+    "joins": [
+      {
+        "left_alias": "p",
+        "right_alias": "m",
+        "left_on": ["Machine"],
+        "right_on": ["Machine"],
+        "how": "left"
+      }
+    ],
     "select": [],
-    "group_by": ["Machine"],
+    "date_buckets": [
+      {"column": "p.Date", "unit": "month", "alias": "month"}
+    ],
+    "group_by": ["month", "m.Line"],
     "filters": [
-      {"column": "Yield", "operator": "gte", "value": 80}
+      {"column": "p.Yield", "operator": "gte", "value": 80}
     ],
     "aggregations": [
       {"function": "count", "alias": "sample_count"},
-      {"function": "mean", "column": "Yield", "alias": "mean_yield"}
+      {
+        "function": "percentile",
+        "column": "p.Yield",
+        "percentile": 0.5,
+        "alias": "median_yield"
+      }
     ],
     "sort": [
-      {"column": "mean_yield", "direction": "asc"}
+      {"column": "month", "direction": "asc"}
     ],
     "limit": 1000,
     "charts": [
       {
-        "type": "bar",
-        "x_field": "Machine",
-        "y_field": "mean_yield",
-        "title": "Average yield by machine"
+        "type": "line",
+        "x_field": "month",
+        "y_field": "median_yield",
+        "series_field": "m.Line",
+        "x_type": "time",
+        "y_unit": "%",
+        "decimal_places": 2,
+        "zoom": true,
+        "title": "Monthly median yield"
       }
     ]
   }
@@ -754,14 +858,42 @@ Response：
 
 限制：
 
-- `select` 或 `aggregations` 至少一個非空。
+- `select`、`aggregations`、`pivot`、`correlation` 至少一項。
 - filter operator：`eq/ne/gt/gte/lt/lte/contains/in/is_null/not_null`。
-- aggregation：`count/sum/mean/std/min/max/count_if`。
+- aggregation：`count/distinct_count/sum/mean/std/min/max/count_if/percentile`。
 - chart：`bar/line/scatter`。
+- `sources` 最多 8 個、`joins` 最多 7 個；所有來源必須在同一 Workspace 且已 `ready`。
+- 第一個來源以外的來源必須按順序由 Join 連入，禁止未使用或重複接入來源。
+- date bucket：`day/week/month/quarter/year`。
+- Pivot 與 correlation 不可同時出現在同一計畫；correlation 支援 Pearson／Spearman。
 - aggregation alias 必須唯一，且不得與 `group_by` 欄名相同；後端會完整驗證。
+- date bucket alias 必須唯一，且不得與 aggregation alias 相同。
 - 無 aggregation 時不支援 raw-row sort。
 
-### 8.4 結果
+自然語言入口：
+
+```json
+POST /api/v1/analysis/plan-drafts
+
+{
+  "workspace_id": "<WORKSPACE_UUID>",
+  "session_id": "<SESSION_UUID>",
+  "question": "依月份與產線比較良率中位數",
+  "file_ids": ["<PRODUCTION_FILE_UUID>", "<MACHINE_FILE_UUID>"]
+}
+```
+
+回覆的 `confirmation_required` 固定為 `true`。使用者檢查後呼叫：
+
+```json
+POST /api/v1/analysis/plan-drafts/{draft_id}/confirm
+
+{"plan": null}
+```
+
+若提供編輯後的 `plan`，後端會重新驗證。confirm 成功直接建立 Job。
+
+### 8.6 Job、結果與圖表
 
 完成的 `AnalysisJobResponse.result`：
 
@@ -786,10 +918,17 @@ Response：
   },
   "charts": [
     {
+      "schema_version": "2.0",
       "type": "bar",
       "title": "Average yield by machine",
       "x_field": "Machine",
       "y_field": "mean_yield",
+      "series_field": null,
+      "x_type": "category",
+      "y_unit": "%",
+      "decimal_places": 2,
+      "tooltip_fields": [],
+      "zoom": false,
       "data": [
         {"Machine": "A01", "mean_yield": 96.8}
       ]
@@ -800,7 +939,54 @@ Response：
 ```
 
 前端直接以 `table` 與 `charts` 渲染，不解析 LLM 文字。`truncated=true` 時必須提示
-畫面只顯示部分結果。
+畫面只顯示部分結果；`summary.result_rows` 仍表示完整結果筆數。Chart Schema 交由
+`frontend/echarts-adapter.js` 轉成 ECharts options，禁止執行 API 或 LLM 回傳的
+JavaScript。
+
+Job 狀態為 `queued/running/completed/failed/cancelled`。列表支援 `workspace_id` 或
+相容的 `session_id`，並可用 `file_id`、`status`、`page`、`page_size` 篩選。取消只
+允許 queued／running；重試只允許 failed／cancelled，且會建立新 Job 並保留
+`retry_of_job_id`。
+
+### 8.7 Hybrid 與 Artifact
+
+```json
+POST /api/v1/analysis/hybrid-answer
+
+{
+  "workspace_id": "<WORKSPACE_UUID>",
+  "question": "壓力升高與良率下降時應依哪個 SOP 處理？",
+  "analysis_job_ids": ["<COMPLETED_JOB_UUID>"],
+  "knowledge_base_ids": ["<KB_UUID>"],
+  "top_k": 8,
+  "use_rerank": true,
+  "create_report": true
+}
+```
+
+後端把 `COMPUTED_ANALYSIS_FACTS` 與 `KNOWLEDGE_BASE_EVIDENCE` 分開放入 prompt：
+分析 Job 提供不可由 LLM 修改的數據事實，KB 只提供 SOP、定義與背景說明。呼叫前
+會分別檢查 Workspace 與 Knowledge Base 權限並套用 DLP。`create_report=true`
+要求 Workspace write，成功時回傳 `report_artifact_id`。
+
+成果類型：
+
+| API | 產物 |
+| --- | --- |
+| `POST /analysis/jobs/{job_id}/export` | `csv`、`json`、`parquet` |
+| `POST /analysis/jobs/{job_id}/reports` | Markdown report |
+| `POST /analysis/jobs/{job_id}/charts` | Chart Schema JSON |
+
+Storage 分層：
+
+```text
+local_storage_root/workspaces/{workspace_id}/
+├── files/{file_id}/original/
+├── files/{file_id}/profile/profile.json
+├── files/{file_id}/datasets/*.parquet
+├── jobs/{job_id}/results/result.json
+└── artifacts/{artifact_id}/{filename}
+```
 
 ---
 
@@ -1005,9 +1191,15 @@ GET  /redoc
 | PERMISSION_DENIED       | 權限不足           |
 | DOCUMENT_NOT_FOUND      | 找不到文件          |
 | DOCUMENT_NOT_READY      | 文件尚未完成索引       |
+| ATTACHMENT_NOT_READY    | Session 附件尚未可檢索 |
+| ANALYSIS_NOT_FOUND      | 找不到分析檔、Job 或 Artifact |
+| ANALYSIS_FAILED         | Profiling 或分析執行失敗 |
 | DLP_BLOCKED             | 命中高風險機密規則      |
 | EMBEDDING_SERVICE_ERROR | Embedding 服務錯誤 |
 | LLM_SERVICE_ERROR       | LLM API 錯誤     |
+| CHAT_BUSY               | LLM 併發槽已滿 |
+| CHAT_TIMEOUT            | 問答超過整體期限 |
+| PROMPT_TOO_LARGE        | Prompt 超過模型 context budget |
 | INTERNAL_ERROR          | 系統內部錯誤         |
 
 ---

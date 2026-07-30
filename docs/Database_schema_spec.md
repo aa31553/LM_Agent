@@ -232,10 +232,14 @@ CREATE TABLE knowledge_base_permissions (
 
 ## 11. chat_sessions
 
+下列 current schema 假設第 20 節 `workspaces` 已先建立；既有資料庫由 additive
+migration 新增 `workspace_id`，不會重建 Session 表。
+
 ```sql
 CREATE TABLE chat_sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
+    workspace_id UUID REFERENCES workspaces(id) ON DELETE SET NULL,
     title TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -434,5 +438,60 @@ CREATE TABLE document_images (
 Images are saved on the filesystem. The database stores paths, captions, OCR text, and
 metadata only. RAG access control is inherited from the source document/chunk permission
 filter.
+
+---
+
+## 20. workspaces
+
+Workspace 是分析資料的持久主要歸屬；Chat Session 只是可選的互動來源。
+
+| 欄位 | 說明 |
+| --- | --- |
+| `owner_user_id` | 擁有者；刪除使用者時限制刪除 |
+| `visibility` | `private` 或 `shared` |
+| `is_personal` | 是否為相容流程自動建立的私人 Workspace |
+| `is_active` | 停用後不提供一般存取 |
+
+## 21. workspace_permissions
+
+Workspace 分享規則以 `(workspace_id, subject_type, subject_value)` 唯一。subject
+支援 `user`、`department`、`role`、`project`；permission 為 `read`、`write`、
+`admin`。Workspace owner 與系統 admin 不需額外規則。
+
+## 22. analysis_files
+
+| 欄位 | 說明 |
+| --- | --- |
+| `workspace_id` | 必填，`ON DELETE CASCADE` |
+| `session_id` | 可空，`ON DELETE SET NULL` |
+| `file_path` | 原檔受控路徑 |
+| `profile_path` | `profile.json` 路徑 |
+| `dataset_manifest` | 後端產生的 Sheet／Parquet manifest |
+| `profile_progress` | 0–100 階段式進度 |
+| `profile_error` | 背景轉換錯誤 |
+| `status` | `profile_queued/profiling/ready/failed` |
+| `expires_at` | 新 Workspace 檔案預設 `NULL`，代表持久保存 |
+
+## 23. analysis_plan_drafts 與 analysis_jobs
+
+`analysis_plan_drafts` 保存自然語言問題、來源檔案、已驗證計畫、警告與確認狀態。
+草稿確認後建立 `analysis_jobs`，並以 `draft_id` 保留追蹤關係。
+
+`analysis_jobs` 的 `request_json` 保存正規化 AnalysisPlan；`result_json` 供 API 輪詢，
+`result_path` 指向分層儲存的同一結果。`session_id` 可空，刪除 Session 時設為
+`NULL`。取消與重試透過 `cancel_requested_at`、`retry_of_job_id` 保留稽核軌跡。
+
+## 24. analysis_artifacts
+
+報告、Chart Schema 及 CSV／JSON／Parquet 匯出統一保存為 artifact。資料表記錄
+`workspace_id`、可選的 `file_id/job_id`、`artifact_type`、受控 `file_path`、
+MIME、大小與 metadata。實體檔位於：
+
+```text
+local_storage_root/workspaces/{workspace_id}/artifacts/{artifact_id}/{filename}
+```
+
+Workspace 刪除時，分析檔、Job、草稿、artifact 與對應實體目錄一併刪除；Session
+刪除只解除 `session_id`，不刪除 Workspace 資料。
 
 ---

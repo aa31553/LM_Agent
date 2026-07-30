@@ -161,6 +161,14 @@ API docs will be available at:
 - `http://127.0.0.1:8000/docs`
 - `http://127.0.0.1:8000/redoc`
 
+Repository documentation:
+
+- [Human API guide](docs/FastAPI_Human_Guide.md)
+- [LLM-readable API contract](docs/FastAPI_LLM_Reference.md)
+- [Frontend upload and analysis workflow](docs/Frontend_File_Upload_Guide.md)
+- [Workspace and spreadsheet architecture](docs/session_analysis_workspace.md)
+- [Detailed API specification](docs/Fastapi_spec.md)
+
 Both documentation pages are fully local. Swagger UI and ReDoc JavaScript,
 CSS, favicon, OAuth redirect, and OpenAPI schema are served by the FastAPI
 application under `/docs-assets` without CDN or Google Fonts access. Large
@@ -225,10 +233,15 @@ Out of scope for the initial MVP:
 [FastAPI Backend]
     |
     +-- Auth & Permission Service
+    +-- Workspace Service
     +-- Document Ingestion Service
+    +-- Spreadsheet Profiling / Dataset Service
+    +-- Analysis Orchestrator / Job Service
+    +-- Artifact Service
     +-- Embedding Service Adapter
     +-- Vector Store Service
     +-- RAG Service
+    +-- Hybrid Analysis Service
     +-- DLP / Masking Service
     +-- LLM Service
     +-- Audit Service
@@ -241,7 +254,8 @@ Recommended deployment components:
     |
     +-- nginx
     +-- fastapi-api
-    +-- worker
+    +-- document-worker
+    +-- analysis-worker
     +-- postgres-pgvector
     +-- redis
     +-- local-file-storage
@@ -518,8 +532,13 @@ Important endpoints:
 - `PATCH /api/v1/workspaces/{workspace_id}`
 - `DELETE /api/v1/workspaces/{workspace_id}`
 - `PUT /api/v1/workspaces/{workspace_id}/sessions/{session_id}`
+- `DELETE /api/v1/workspaces/{workspace_id}/sessions/{session_id}`
 - `POST /api/v1/workspaces/{workspace_id}/permissions`
 - `GET /api/v1/workspaces/{workspace_id}/permissions`
+- `DELETE /api/v1/workspaces/{workspace_id}/permissions/{permission_id}`
+- `GET /api/v1/workspaces/{workspace_id}/artifacts`
+- `GET /api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}`
+- `GET /api/v1/workspaces/{workspace_id}/artifacts/{artifact_id}/download`
 - `POST /api/v1/analysis/files/upload`
 - `GET /api/v1/analysis/files`
 - `GET /api/v1/analysis/files/{file_id}`
@@ -528,6 +547,7 @@ Important endpoints:
 - `DELETE /api/v1/analysis/files/{file_id}`
 - `POST /api/v1/analysis/plans/validate`
 - `POST /api/v1/analysis/plan-drafts`
+- `GET /api/v1/analysis/plan-drafts/{draft_id}`
 - `POST /api/v1/analysis/plan-drafts/{draft_id}/confirm`
 - `POST /api/v1/analysis/jobs`
 - `GET /api/v1/analysis/jobs`
@@ -571,7 +591,7 @@ deleted.
 
 Large XLSX/CSV files that require exact filtering, grouping, aggregation, or chart
 data use `/api/v1/analysis`, not document RAG. The analysis worker computes bounded
-table/chart JSON without executing model-generated Python or SQL:
+table/chart JSON without executing model-generated Python, SQL, or JavaScript:
 
 New spreadsheet uploads are profiled in the background. XLSX Sheets and CSV
 sources are converted to Parquet with DuckDB, profiled and queried through Polars,
@@ -579,7 +599,8 @@ and exposed only after the file reaches `ready`. Advanced plans support
 multi-Sheet/file Join, date buckets, Pivot, percentile, and correlation.
 
 Natural-language requests create a validated `AnalysisPlanDraft`; a separate
-confirmation call is required before a Job is queued. Completed analysis facts can
+confirmation call is required and directly creates the queued Job. Frontends must
+not submit the confirmed plan again through `POST /analysis/jobs`. Completed analysis facts can
 be combined with authorized knowledge-base evidence through `hybrid-answer`.
 Reports, versioned chart schemas, and CSV/JSON/Parquet exports are stored as
 Workspace artifacts.
@@ -650,6 +671,12 @@ Primary tables:
 - `masking_events`
 - `llm_call_logs`
 - `document_processing_jobs`
+- `workspaces`
+- `workspace_permissions`
+- `analysis_files`
+- `analysis_jobs`
+- `analysis_plan_drafts`
+- `analysis_artifacts`
 - `sensitive_dictionaries`
 - `prompt_templates`
 - `audit_events`
