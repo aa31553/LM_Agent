@@ -133,7 +133,6 @@ def test_orchestrator_repairs_invalid_plan_at_most_once() -> None:
     assert "禁止輸出 Python" in llm.calls[0]["system_prompt"]
 
 
-
 def test_orchestrator_repairs_dataset_validation_error_once() -> None:
     llm = FakeRepairLLM('{"select":["Machine"],"limit":100,"charts":[]}')
     service = AnalysisOrchestratorService(None, llm_service=llm)
