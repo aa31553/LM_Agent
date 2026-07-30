@@ -155,6 +155,31 @@ def test_orchestrator_repairs_dataset_validation_error_once() -> None:
     assert len(llm.calls) == 1
 
 
+
+def test_repair_cannot_expand_the_approved_file_scope() -> None:
+    unauthorized_id = "00000000-0000-0000-0000-000000000002"
+    llm = FakeRepairLLM(
+        "{"
+        f'"sources":[{{"file_id":"{unauthorized_id}","alias":"data","sheet":"Production"}}],'
+        '"select":["Machine"],"charts":[]}'
+    )
+    service = AnalysisOrchestratorService(None, llm_service=llm)
+
+    with pytest.raises(APIError) as error:
+        asyncio.run(
+            service._normalize_and_validate_plan(
+                {"select": ["Machine"], "limit": "invalid", "charts": []},
+                schema_context='{"columns":["Machine"]}',
+                default_source=DEFAULT_SOURCE,
+                manifests=MANIFESTS,
+                allowed_file_ids={FILE_ID},
+            )
+        )
+
+    assert error.value.error_code == ErrorCode.PERMISSION_DENIED
+    assert len(llm.calls) == 1
+
+
 def test_orchestrator_stops_after_failed_repair() -> None:
     llm = FakeRepairLLM('{"limit":"still-invalid","charts":[]}')
     service = AnalysisOrchestratorService(None, llm_service=llm)
