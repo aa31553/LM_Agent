@@ -150,7 +150,7 @@ def test_orchestrator_repairs_dataset_validation_error_once() -> None:
     assert plan.select == ["Machine"]
     assert warnings == []
     assert attempted is True
-    assert errors == ["Analysis plan references columns that are not present."]
+    assert errors == ["Unknown analysis column: MissingColumn"]
     assert actions[-1]["code"] == "LLM_PLAN_REPAIRED"
     assert len(llm.calls) == 1
 
