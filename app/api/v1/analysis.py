@@ -2,13 +2,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi import status as http_status
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import ChatType, ConfidentialLevel, ErrorCode
+from app.core.constants import (
+    AnalysisJobStatus,
+    ChatType,
+    ConfidentialLevel,
+    ErrorCode,
+)
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
@@ -20,6 +25,7 @@ from app.schemas.analysis import (
     AnalysisFileListResponse,
     AnalysisFileUploadResponse,
     AnalysisJobCreate,
+    AnalysisJobListResponse,
     AnalysisJobResponse,
     AnalysisPlanValidateRequest,
     AnalysisPlanValidationResponse,
@@ -195,6 +201,11 @@ def inspect_analysis_file(
         filename=source.original_filename,
         file_type=source.file_type,
         sheets=sheets,
+        warnings=[
+            warning
+            for sheet in sheets
+            for warning in sheet.get("warnings", [])
+        ],
     )
 
 
@@ -250,6 +261,34 @@ def create_analysis_job(
     return service.response(job)
 
 
+@router.get("/jobs", response_model=AnalysisJobListResponse)
+def list_analysis_jobs(
+    session_id: UUID,
+    file_id: UUID | None = None,
+    status: AnalysisJobStatus | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisJobListResponse:
+    service = AnalysisJobService(db)
+    jobs, total = service.list_jobs(
+        session_id,
+        principal,
+        file_id=file_id,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    return AnalysisJobListResponse(
+        session_id=session_id,
+        items=[service.response(job) for job in jobs],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
 @router.get("/jobs/{job_id}", response_model=AnalysisJobResponse)
 def get_analysis_job(
     job_id: UUID,
@@ -258,6 +297,30 @@ def get_analysis_job(
 ) -> AnalysisJobResponse:
     service = AnalysisJobService(db)
     return service.response(service.get(job_id, principal))
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=AnalysisJobResponse)
+def cancel_analysis_job(
+    job_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisJobResponse:
+    service = AnalysisJobService(db)
+    return service.response(service.cancel(job_id, principal))
+
+
+@router.post(
+    "/jobs/{job_id}/retry",
+    response_model=AnalysisJobResponse,
+    status_code=http_status.HTTP_202_ACCEPTED,
+)
+def retry_analysis_job(
+    job_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AnalysisJobResponse:
+    service = AnalysisJobService(db)
+    return service.response(service.retry(job_id, principal))
 
 
 @router.post(

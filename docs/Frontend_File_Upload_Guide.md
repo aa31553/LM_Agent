@@ -655,6 +655,47 @@ DELETE /api/v1/analysis/files/{file_id}
 附件、分析檔、分析 Job、聊天訊息與相關本機 artifact，回覆包含
 `deleted_documents`、`deleted_analysis_files`、`deleted_messages` 與 `deleted_files`。
 
+### 5.9 分析 Job 列表、進度、取消與重試
+
+```http
+GET  /api/v1/analysis/jobs?session_id={session_id}&page=1&page_size=50
+POST /api/v1/analysis/jobs/{job_id}/cancel
+POST /api/v1/analysis/jobs/{job_id}/retry
+```
+
+列表可選擇加入 `file_id` 與 `status` 篩選。Job 回覆新增：
+
+```json
+{
+  "progress": 10,
+  "retry_of_job_id": null,
+  "cancel_requested_at": null
+}
+```
+
+`progress` 為階段式進度，不代表精確列數百分比：queued 為 0、claimed 為 5、
+分析子行程執行中為 10、completed／failed 為 100。取消 running Job 後，
+後端會立即回覆 `cancelled`，Worker 隨後終止該 Job 的分析子行程。重試只允許
+failed／cancelled，並建立新的 Job ID，原 Job 保留供稽核。
+
+### 5.10 Excel 警告與 ECharts
+
+`GET /api/v1/analysis/files/{file_id}/inspect` 的 response 與各 Sheet 皆有
+`warnings`。前端必須顯示公式快取、缺少公式快取值、Excel 顯示格式不保留等警告。
+
+分析結果的 `charts[]` 由 `frontend/echarts-adapter.js` 轉換：
+
+```js
+const instance = LMAnalysisCharts.render(
+  document.querySelector("#chart.analysis-chart"),
+  job.result.charts[0],
+);
+```
+
+前端已隨附 ECharts 6.1.0 runtime，不需外部 CDN。圖表容器應套用
+`analysis-chart` class 以確保有可渲染高度。Adapter 僅接受 bar、line、
+scatter，不執行 API 或 LLM 回傳的 JavaScript。
+
 ## 6. UI 狀態與錯誤處理建議
 
 | HTTP／錯誤碼 | 前端行為 |

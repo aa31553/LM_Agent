@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from openpyxl import load_workbook
 
@@ -21,7 +21,7 @@ class SpreadsheetAnalysisService:
     supported operation is represented by a validated AnalysisPlan whitelist.
     """
 
-    SUPPORTED_TYPES = {"xlsx", "csv"}
+    SUPPORTED_TYPES: ClassVar[set[str]] = {"xlsx", "csv"}
 
     def inspect(self, file_path: str, file_type: str) -> list[dict[str, Any]]:
         normalized_type = self._ensure_supported(file_type)
@@ -96,7 +96,7 @@ class SpreadsheetAnalysisService:
                 400,
             )
         normalized = plan.model_copy(update={"sheet": selected_sheet["name"]})
-        warnings: list[str] = []
+        warnings = list(selected_sheet.get("warnings", []))
         if normalized.select and normalized.aggregations:
             warnings.append(
                 "select is ignored for aggregation output; use group_by and "
@@ -194,7 +194,9 @@ class SpreadsheetAnalysisService:
                 reverse=sort.direction == "desc",
             )
 
-        total_result_rows = len(result_rows)
+        total_result_rows = (
+            len(result_rows) if normalized.aggregations else matched_rows
+        )
         result_rows = result_rows[
             : min(normalized.limit, settings.analysis_result_max_rows)
         ]
@@ -230,36 +232,83 @@ class SpreadsheetAnalysisService:
         }
 
     def _inspect_xlsx(self, file_path: str) -> list[dict[str, Any]]:
-        workbook = load_workbook(file_path, read_only=True, data_only=True)
+        value_workbook = load_workbook(
+            file_path,
+            read_only=True,
+            data_only=True,
+        )
+        formula_workbook = load_workbook(
+            file_path,
+            read_only=True,
+            data_only=False,
+        )
         try:
             return [
-                self._inspect_worksheet(sheet)
-                for sheet in workbook.worksheets
+                self._inspect_worksheet(
+                    value_sheet,
+                    formula_workbook[value_sheet.title],
+                )
+                for value_sheet in value_workbook.worksheets
             ]
         finally:
-            workbook.close()
+            value_workbook.close()
+            formula_workbook.close()
 
-    def _inspect_worksheet(self, worksheet) -> dict[str, Any]:
-        iterator = worksheet.iter_rows(values_only=True)
+    def _inspect_worksheet(self, value_worksheet, formula_worksheet) -> dict[str, Any]:
+        value_iterator = value_worksheet.iter_rows()
+        formula_iterator = formula_worksheet.iter_rows()
         try:
-            headers = self._normalize_headers(next(iterator))
+            header_cells = next(value_iterator)
+            headers = self._normalize_headers(
+                [cell.value for cell in header_cells]
+            )
+            next(formula_iterator, ())
         except StopIteration:
             headers = []
         samples: list[dict[str, Any]] = []
-        for values in iterator:
+        formula_cells = 0
+        formulas_without_cached_values = 0
+        formatted_cells = 0
+        for value_cells in value_iterator:
+            source_cells = next(formula_iterator, ())
+            values = [cell.value for cell in value_cells]
             samples.append(
                 {
                     header: self._json_value(value)
                     for header, value in zip(headers, values, strict=False)
                 }
             )
+            for value_cell, source_cell in zip(
+                value_cells,
+                source_cells,
+                strict=False,
+            ):
+                if source_cell.data_type == "f":
+                    formula_cells += 1
+                    if value_cell.value is None:
+                        formulas_without_cached_values += 1
+                if (
+                    source_cell.value not in {None, ""}
+                    and source_cell.number_format
+                    and source_cell.number_format != "General"
+                ):
+                    formatted_cells += 1
             if len(samples) >= settings.analysis_sample_rows:
                 break
+        warnings = self._xlsx_sample_warnings(
+            value_worksheet.title,
+            formula_cells=formula_cells,
+            formulas_without_cached_values=formulas_without_cached_values,
+            formatted_cells=formatted_cells,
+        )
         return self._sheet_info(
-            worksheet.title,
-            max((worksheet.max_row or 1) - 1, 0),
+            value_worksheet.title,
+            max((value_worksheet.max_row or 1) - 1, 0),
             headers,
             samples,
+            formula_cells_in_sample=formula_cells,
+            formatted_cells_in_sample=formatted_cells,
+            warnings=warnings,
         )
 
     def _inspect_csv(self, file_path: str) -> dict[str, Any]:
@@ -288,6 +337,10 @@ class SpreadsheetAnalysisService:
         row_count: int | None,
         headers: list[str],
         samples: list[dict[str, Any]],
+        *,
+        formula_cells_in_sample: int = 0,
+        formatted_cells_in_sample: int = 0,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         columns = []
         for header in headers:
@@ -310,7 +363,40 @@ class SpreadsheetAnalysisService:
             "column_count": len(headers),
             "columns": columns,
             "sample_rows": samples,
+            "formula_cells_in_sample": formula_cells_in_sample,
+            "formatted_cells_in_sample": formatted_cells_in_sample,
+            "warnings": warnings or [],
         }
+
+    def _xlsx_sample_warnings(
+        self,
+        sheet_name: str,
+        *,
+        formula_cells: int,
+        formulas_without_cached_values: int,
+        formatted_cells: int,
+    ) -> list[str]:
+        warnings: list[str] = []
+        if formula_cells:
+            warnings.append(
+                f"Sheet {sheet_name}: {formula_cells} formula cell(s) were found "
+                "in the inspected sample. Analysis uses the last cached values "
+                "saved by Excel and does not recalculate formulas."
+            )
+        if formulas_without_cached_values:
+            warnings.append(
+                f"Sheet {sheet_name}: {formulas_without_cached_values} sampled "
+                "formula cell(s) have no cached value. Recalculate and save the "
+                "workbook in Excel before analysis."
+            )
+        if formatted_cells:
+            warnings.append(
+                f"Sheet {sheet_name}: {formatted_cells} sampled cell(s) use Excel "
+                "display formatting. Analysis uses underlying values; number, "
+                "date, percentage, and leading-zero display formats are not "
+                "preserved in result JSON."
+            )
+        return warnings
 
     def _iter_rows(
         self,
@@ -530,6 +616,7 @@ class SpreadsheetAnalysisService:
         rows: list[dict[str, Any]],
     ) -> dict[str, Any]:
         return {
+            "schema_version": "1.0",
             "type": chart.type,
             "title": chart.title,
             "x_field": chart.x_field,

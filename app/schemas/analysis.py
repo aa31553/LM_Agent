@@ -23,6 +23,9 @@ class SpreadsheetSheetInfo(BaseModel):
     column_count: int
     columns: list[SpreadsheetColumnInfo]
     sample_rows: list[dict[str, Scalar]] = Field(default_factory=list)
+    formula_cells_in_sample: int = 0
+    formatted_cells_in_sample: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SpreadsheetInspectionResponse(BaseModel):
@@ -30,6 +33,7 @@ class SpreadsheetInspectionResponse(BaseModel):
     filename: str
     file_type: str
     sheets: list[SpreadsheetSheetInfo]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AnalysisFileUploadResponse(BaseModel):
@@ -66,6 +70,12 @@ class FilterCondition(BaseModel):
         "not_null",
     ]
     value: Scalar | list[Scalar] = None
+
+    @model_validator(mode="after")
+    def validate_value(self):
+        if self.operator not in {"is_null", "not_null"} and self.value is None:
+            raise ValueError(f"value is required for {self.operator}")
+        return self
 
 
 class AggregationSpec(BaseModel):
@@ -106,9 +116,24 @@ class AnalysisPlan(BaseModel):
     charts: list[ChartSpec] = Field(default_factory=list, max_length=5)
 
     @model_validator(mode="after")
-    def require_output(self):
+    def validate_output(self):
         if not self.select and not self.aggregations:
             raise ValueError("select or aggregations is required")
+        aliases = [item.alias for item in self.aggregations]
+        duplicate_aliases = sorted(
+            alias for alias in set(aliases) if aliases.count(alias) > 1
+        )
+        if duplicate_aliases:
+            raise ValueError(
+                "aggregation aliases must be unique: "
+                + ", ".join(duplicate_aliases)
+            )
+        conflicting_aliases = sorted(set(aliases) & set(self.group_by))
+        if conflicting_aliases:
+            raise ValueError(
+                "aggregation aliases must not match group_by columns: "
+                + ", ".join(conflicting_aliases)
+            )
         return self
 
 
@@ -134,11 +159,22 @@ class AnalysisJobResponse(BaseModel):
     file_id: UUID
     status: AnalysisJobStatus
     plan: AnalysisPlan
+    progress: int = Field(default=0, ge=0, le=100)
     result: dict[str, Any] | None = None
     error_message: str | None = None
+    retry_of_job_id: UUID | None = None
+    cancel_requested_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None = None
+
+
+class AnalysisJobListResponse(BaseModel):
+    session_id: UUID
+    items: list[AnalysisJobResponse]
+    total: int
+    page: int
+    page_size: int
 
 
 class AnalysisExplanationResponse(BaseModel):

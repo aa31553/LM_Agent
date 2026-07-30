@@ -255,6 +255,11 @@ label {
   grid-column: 1 / -1;
 }
 
+.analysis-chart {
+  width: 100%;
+  min-height: 420px;
+}
+
 .metric-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

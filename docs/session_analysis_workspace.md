@@ -67,7 +67,7 @@ a `session_id` create separate Sessions.
 4. Validate the plan against the actual schema.
 5. Create a queued analysis job.
 6. Run `python -m app.workers.analysis_tasks` in a separate process.
-7. Poll the job until it is completed or failed.
+7. Poll the job until it is completed, failed, or cancelled.
 8. Render the returned table and chart JSON directly in the frontend.
 9. Optionally ask the 31B LLM to explain the completed result JSON.
 
@@ -81,7 +81,10 @@ a `session_id` create separate Sessions.
 | DELETE | `/api/v1/analysis/files/{file_id}` | Delete file and jobs |
 | POST | `/api/v1/analysis/plans/validate` | Validate and normalize a whitelist plan |
 | POST | `/api/v1/analysis/jobs` | Queue an analysis job |
+| GET | `/api/v1/analysis/jobs?session_id=...` | List and filter paginated jobs for a session |
 | GET | `/api/v1/analysis/jobs/{job_id}` | Return status and structured result |
+| POST | `/api/v1/analysis/jobs/{job_id}/cancel` | Cancel a queued or running job |
+| POST | `/api/v1/analysis/jobs/{job_id}/retry` | Queue a new attempt for a failed or cancelled job |
 | POST | `/api/v1/analysis/jobs/{job_id}/explain` | Ask the LLM to explain a completed result |
 
 ### Supported deterministic operations
@@ -99,8 +102,28 @@ incompatible numeric operations, unsupported output fields, oversized row counts
 and excessive group counts are rejected before or during execution.
 
 Every aggregation alias must be unique and must not collide with a `group_by`
-column name. API 0.10.0 does not yet reject every alias collision, so clients must
-enforce this constraint before calling the validation or job endpoints.
+column name. The API rejects these collisions before plan execution. Filter
+operators other than `is_null` and `not_null` must include a value.
+
+Raw extraction summaries report the complete number of matched rows in
+`summary.result_rows`, even when `limit` or `ANALYSIS_RESULT_MAX_ROWS` truncates
+the returned table. `summary.truncated` is therefore reliable for both raw and
+aggregated results.
+
+### XLSX formulas and formats
+
+Inspection returns additive `warnings` fields at response and sheet level. The
+sheet payload also includes `formula_cells_in_sample` and
+`formatted_cells_in_sample`.
+
+- Formula cells use the cached value last saved by Excel. The backend does not
+  recalculate formulas.
+- A formula with no cached value is returned as null and produces a warning.
+- Date, percentage, number, and leading-zero display formats are not preserved in
+  result JSON; calculations use the underlying cell value.
+
+These counts cover the configured inspection sample, not the complete workbook.
+Recalculate and save workbooks in Excel before analysis when formulas are used.
 
 ### Example plan
 
@@ -140,6 +163,18 @@ The analysis API only stores files and queues database jobs. The dedicated worke
 claims jobs using PostgreSQL row locking and executes spreadsheet processing in a
 killable child process with a configured timeout. This avoids blocking Uvicorn and
 allows multiple worker processes without claiming the same job.
+
+Job progress is intentionally coarse in this phase: `0` while queued, `5` when
+claimed, `10` while the spreadsheet subprocess is running, and `100` when completed
+or failed. Cancelling a running job updates the database immediately and the worker
+terminates its child process on the next cancellation poll. Retry creates a new job
+with `retry_of_job_id`; it never mutates or erases the original attempt.
+
+Chart payloads include `schema_version: "1.0"` and retain the compatible
+`type`, `title`, `x_field`, `y_field`, and `data` fields. The frontend loads a local
+ECharts runtime and `frontend/echarts-adapter.js`, which turns only the approved
+bar, line, and scatter payloads into ECharts options. No model-generated
+JavaScript is evaluated.
 
 The LLM explanation endpoint receives only bounded result JSON. Its fixed prompt
 states that calculations are final, numbers must not be changed, and causal claims

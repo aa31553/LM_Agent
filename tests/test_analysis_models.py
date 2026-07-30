@@ -18,3 +18,5 @@ def test_analysis_tables_compile_for_postgresql() -> None:
     assert "analysis_files" in file_sql
     assert "analysis_jobs" in job_sql
     assert "file_id" in job_sql
+    assert "progress" in job_sql
+    assert "retry_of_job_id" in job_sql

@@ -4,17 +4,28 @@ from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
+from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
-from app.core.constants import RetrievalScope
+from app.core.config import settings
+from app.core.constants import AnalysisJobStatus, ConfidentialLevel, RetrievalScope
 from app.core.exceptions import APIError
+from app.core.security import Principal
+from app.models.analysis import AnalysisFile, AnalysisJob
+from app.models.audit import AuditEvent
+from app.models.chat import ChatSession
+from app.models.user import User
 from app.schemas.analysis import (
     AggregationSpec,
+    AnalysisJobCreate,
     AnalysisPlan,
     ChartSpec,
     FilterCondition,
     SortSpec,
 )
 from app.schemas.chat import ChatQueryRequest
+from app.services.analysis_job_service import AnalysisJobService
 from app.services.spreadsheet_analysis_service import SpreadsheetAnalysisService
 from app.storage.local_storage import LocalStorage
 
@@ -163,6 +174,146 @@ def test_raw_extraction_sort_is_rejected_to_avoid_inexact_top_n(
                 sort=[SortSpec(column="Yield", direction="desc")],
             ),
         )
+
+
+def test_aggregation_aliases_are_unique_and_do_not_shadow_group_columns() -> None:
+    with pytest.raises(ValidationError, match="must be unique"):
+        AnalysisPlan(
+            aggregations=[
+                AggregationSpec(function="count", alias="total"),
+                AggregationSpec(function="count", alias="total"),
+            ]
+        )
+
+    with pytest.raises(ValidationError, match="must not match group_by"):
+        AnalysisPlan(
+            group_by=["Machine"],
+            aggregations=[
+                AggregationSpec(function="count", alias="Machine"),
+            ],
+        )
+
+
+def test_non_null_filter_operators_require_a_value() -> None:
+    with pytest.raises(ValidationError, match="value is required"):
+        FilterCondition(column="Yield", operator="lt")
+    assert (
+        FilterCondition(column="Yield", operator="is_null").value is None
+    )
+
+
+def test_raw_result_reports_total_matches_when_rows_are_truncated(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "production.xlsx"
+    _workbook(path)
+    monkeypatch.setattr(settings, "analysis_result_max_rows", 2)
+
+    result = SpreadsheetAnalysisService().execute(
+        str(path),
+        "xlsx",
+        AnalysisPlan(select=["Machine"], limit=3),
+    )
+
+    assert result["summary"] == {
+        "processed_rows": 4,
+        "matched_rows": 4,
+        "result_rows": 4,
+        "returned_rows": 2,
+        "truncated": True,
+        "warnings": [],
+    }
+
+
+def test_xlsx_inspection_warns_about_formulas_and_display_formats(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "formatted.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Metrics"
+    sheet.append(["Yield", "Calculated"])
+    sheet.append([0.985, "=A2*100"])
+    sheet["A2"].number_format = "0.0%"
+    workbook.save(path)
+
+    inspection = SpreadsheetAnalysisService().inspect(str(path), "xlsx")
+    metrics = inspection[0]
+
+    assert metrics["formula_cells_in_sample"] == 1
+    assert metrics["formatted_cells_in_sample"] == 1
+    assert any("does not recalculate formulas" in item for item in metrics["warnings"])
+    assert any("display formatting" in item for item in metrics["warnings"])
+    assert any("no cached value" in item for item in metrics["warnings"])
+
+
+def test_analysis_job_list_cancel_and_retry(tmp_path: Path) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    for table in (
+        User.__table__,
+        ChatSession.__table__,
+        AnalysisFile.__table__,
+        AnalysisJob.__table__,
+        AuditEvent.__table__,
+    ):
+        table.create(engine)
+
+    path = tmp_path / "production.xlsx"
+    _workbook(path)
+    principal = Principal(
+        external_user_id="analysis-user",
+        username="analysis-user",
+        clearance_level=ConfidentialLevel.INTERNAL,
+    )
+    with Session(engine) as db:
+        user = User(
+            external_user_id=principal.external_user_id,
+            username=principal.username,
+            clearance_level=principal.clearance_level.value,
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+        chat_session = ChatSession(user_id=user.id, chat_type="general")
+        db.add(chat_session)
+        db.flush()
+        source = AnalysisFile(
+            session_id=chat_session.id,
+            created_by=user.id,
+            filename="stored-production.xlsx",
+            original_filename="production.xlsx",
+            file_type="xlsx",
+            file_path=str(path),
+            size_bytes=path.stat().st_size,
+            confidential_level=ConfidentialLevel.INTERNAL.value,
+            status="ready",
+        )
+        db.add(source)
+        db.commit()
+
+        service = AnalysisJobService(db)
+        queued = service.create(
+            AnalysisJobCreate(
+                file_id=source.id,
+                plan=AnalysisPlan(select=["Machine"]),
+            ),
+            principal,
+        )
+        assert queued.progress == 0
+        items, total = service.list_jobs(chat_session.id, principal)
+        assert total == 1
+        assert [item.id for item in items] == [queued.id]
+
+        cancelled = service.cancel(queued.id, principal)
+        assert cancelled.status == AnalysisJobStatus.CANCELLED.value
+        assert cancelled.cancel_requested_at is not None
+        assert cancelled.finished_at is not None
+
+        retry = service.retry(cancelled.id, principal)
+        assert retry.status == AnalysisJobStatus.QUEUED.value
+        assert retry.progress == 0
+        assert retry.retry_of_job_id == cancelled.id
 
 
 def test_chat_attachment_scope_requires_explicit_session_and_ids() -> None:

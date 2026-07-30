@@ -74,6 +74,7 @@ class AnalysisJobStatus(TextEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class DLPAction(TextEnum):

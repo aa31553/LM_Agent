@@ -4,7 +4,11 @@ import pytest
 from PIL import Image
 
 from app.services.pdf_processing_service import PDFProcessingLimitError, process_pdf_file
-from app.workers.process_runner import ProcessWorkerTimeoutError, run_in_process
+from app.workers.process_runner import (
+    ProcessWorkerCancelledError,
+    ProcessWorkerTimeoutError,
+    run_in_process,
+)
 
 
 def _sleep_for_test(*, seconds: float) -> None:
@@ -60,3 +64,22 @@ def test_pdf_processing_rejects_page_limit(tmp_path) -> None:
 def test_pdf_subprocess_timeout_terminates_stuck_work() -> None:
     with pytest.raises(ProcessWorkerTimeoutError):
         run_in_process(_sleep_for_test, timeout_seconds=0.05, kwargs={"seconds": 1.0})
+
+
+def test_subprocess_cancel_check_terminates_work() -> None:
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    with pytest.raises(ProcessWorkerCancelledError):
+        run_in_process(
+            _sleep_for_test,
+            timeout_seconds=5,
+            kwargs={"seconds": 1.0},
+            cancel_check=cancelled,
+            poll_interval_seconds=0.01,
+        )
+    assert checks == 2
