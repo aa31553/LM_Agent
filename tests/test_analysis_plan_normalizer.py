@@ -11,6 +11,28 @@ from app.services.analysis_orchestrator_service import AnalysisOrchestratorServi
 from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
 
 
+FILE_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_SOURCE = {
+    "file_id": FILE_ID,
+    "alias": "data",
+    "sheet": "Production",
+}
+MANIFESTS = {
+    FILE_ID: {
+        "datasets": [
+            {
+                "sheet": "Production",
+                "columns": [
+                    {"name": "Machine", "inferred_type": "string"},
+                    {"name": "mean_yield", "inferred_type": "number"},
+                ],
+                "warnings": [],
+            }
+        ]
+    }
+}
+
+
 class FakeRepairLLM:
     def __init__(self, response: str) -> None:
         self.response = response
@@ -96,7 +118,9 @@ def test_orchestrator_repairs_invalid_plan_at_most_once() -> None:
         service._normalize_and_validate_plan(
             {"select": ["Machine"], "limit": "invalid", "charts": []},
             schema_context='{"columns":["Machine"]}',
-            default_source=None,
+            default_source=DEFAULT_SOURCE,
+            manifests=MANIFESTS,
+            allowed_file_ids={FILE_ID},
         )
     )
 
@@ -117,7 +141,9 @@ def test_orchestrator_stops_after_failed_repair() -> None:
             service._normalize_and_validate_plan(
                 {"select": ["Machine"], "limit": "invalid", "charts": []},
                 schema_context='{"columns":["Machine"]}',
-                default_source=None,
+                default_source=DEFAULT_SOURCE,
+                manifests=MANIFESTS,
+                allowed_file_ids={FILE_ID},
             )
         )
 
