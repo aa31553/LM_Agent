@@ -28,9 +28,9 @@ class AnalysisPlanRepairService:
             "這是唯一一次修復機會。"
         )
         repair_context = {
-            "validation_error": validation_error,
-            "available_schema": schema_context,
             "invalid_plan": plan_payload,
+            "validation_error": validation_error,
+            "available_schema": schema_context[: settings.analysis_plan_schema_max_chars // 2],
         }
         user_prompt = (
             "請修復下列 AnalysisPlan。保留使用者意圖，並符合目前的 "
