@@ -155,7 +155,6 @@ def test_orchestrator_repairs_dataset_validation_error_once() -> None:
     assert len(llm.calls) == 1
 
 
-
 def test_repair_cannot_expand_the_approved_file_scope() -> None:
     unauthorized_id = "00000000-0000-0000-0000-000000000002"
     llm = FakeRepairLLM(
