@@ -38,7 +38,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          python -m ruff check `
+          $output = & python -m ruff check --output-format concise `
             app/core/constants.py `
             app/db/startup.py `
             app/models/analysis.py `
@@ -46,7 +46,17 @@ jobs:
             app/services/analysis_orchestrator_service.py `
             app/services/analysis_plan_normalizer.py `
             app/services/analysis_plan_repair_service.py `
-            tests/test_analysis_plan_normalizer.py
+            tests/test_analysis_plan_normalizer.py 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | Write-Output
+          if ($exitCode -ne 0) {
+            $diagnostic = ($output | Select-Object -First 1).ToString()
+            if ($diagnostic.Length -gt 70) {
+              $diagnostic = $diagnostic.Substring(0, 70)
+            }
+            "diagnostic=$diagnostic" >> $env:GITHUB_OUTPUT
+            exit $exitCode
+          }
 
       - name: Run Windows compatibility regressions
         id: tests
@@ -65,6 +75,7 @@ jobs:
           INSTALL_RESULT: ${{ steps.install.outcome }}
           LINT_RESULT: ${{ steps.lint.outcome }}
           TEST_RESULT: ${{ steps.tests.outcome }}
+          LINT_DIAGNOSTIC: ${{ steps.lint.outputs.diagnostic }}
           TARGET_SHA: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -82,9 +93,13 @@ jobs:
           foreach ($check in $checks) {
             $state = if ($check.result -eq "success") { "success" } else { "failure" }
             if ($state -eq "failure") { $failed = $true }
+            $context = $check.context
+            if ($check.context -eq "windows/lint" -and $state -eq "failure" -and $env:LINT_DIAGNOSTIC) {
+              $context = "windows/lint/$env:LINT_DIAGNOSTIC"
+            }
             $body = @{
               state = $state
-              context = $check.context
+              context = $context
               description = "Windows Phase 0-1: $($check.result)"
             } | ConvertTo-Json
             Invoke-RestMethod `
