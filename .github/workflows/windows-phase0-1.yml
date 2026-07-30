@@ -26,12 +26,16 @@ jobs:
           cache: pip
 
       - name: Install project and test tools
+        id: install
+        continue-on-error: true
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
       - name: Lint Phase 0-1 changes
+        id: lint
+        continue-on-error: true
         shell: pwsh
         run: |
           python -m ruff check `
@@ -45,36 +49,49 @@ jobs:
             tests/test_analysis_plan_normalizer.py
 
       - name: Run Windows compatibility regressions
+        id: tests
+        continue-on-error: true
         shell: pwsh
         run: |
           python -m pytest -q `
             tests/test_analysis_plan_normalizer.py `
             tests/test_session_analysis_workspace.py
 
-      - name: Publish observable commit status
+      - name: Publish observable commit statuses
         if: always()
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CI_RESULT: ${{ job.status }}
+          INSTALL_RESULT: ${{ steps.install.outcome }}
+          LINT_RESULT: ${{ steps.lint.outcome }}
+          TEST_RESULT: ${{ steps.tests.outcome }}
           TARGET_SHA: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          $state = if ($env:CI_RESULT -eq "success") { "success" } else { "failure" }
-          $description = "Windows Phase 0-1: $($env:CI_RESULT)"
-          $body = @{
-            state = $state
-            context = "windows/phase0-1"
-            description = $description
-          } | ConvertTo-Json
           $headers = @{
             Authorization = "Bearer $env:GH_TOKEN"
             Accept = "application/vnd.github+json"
             "X-GitHub-Api-Version" = "2022-11-28"
           }
-          Invoke-RestMethod `
-            -Method Post `
-            -Uri "https://api.github.com/repos/$env:REPOSITORY/statuses/$env:TARGET_SHA" `
-            -Headers $headers `
-            -ContentType "application/json" `
-            -Body $body
+          $checks = @(
+            @{ context = "windows/install"; result = $env:INSTALL_RESULT },
+            @{ context = "windows/lint"; result = $env:LINT_RESULT },
+            @{ context = "windows/tests"; result = $env:TEST_RESULT }
+          )
+          $failed = $false
+          foreach ($check in $checks) {
+            $state = if ($check.result -eq "success") { "success" } else { "failure" }
+            if ($state -eq "failure") { $failed = $true }
+            $body = @{
+              state = $state
+              context = $check.context
+              description = "Windows Phase 0-1: $($check.result)"
+            } | ConvertTo-Json
+            Invoke-RestMethod `
+              -Method Post `
+              -Uri "https://api.github.com/repos/$env:REPOSITORY/statuses/$env:TARGET_SHA" `
+              -Headers $headers `
+              -ContentType "application/json" `
+              -Body $body
+          }
+          if ($failed) { throw "One or more Windows Phase 0-1 checks failed." }
