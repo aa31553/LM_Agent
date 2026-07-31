@@ -103,6 +103,7 @@ class AnalysisPlanDraft(Base):
     recipe_version: Mapped[str | None] = mapped_column(String(16))
     compiler_version: Mapped[str | None] = mapped_column(String(16))
     warnings_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    clarification_json: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

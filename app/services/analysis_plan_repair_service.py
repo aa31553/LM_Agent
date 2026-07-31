@@ -37,7 +37,10 @@ class AnalysisPlanRepairService:
         user_prompt = (
             f"請修復下列 {contract_name}。保留使用者意圖；"
             + (
-                "只選擇白名單 Recipe 與參數，不要輸出圖表欄位：\n"
+                "只選擇白名單 Recipe 與參數，不要輸出圖表欄位。"
+                "count 聚合必須移除 value_field；mean/sum/min/max/median "
+                "聚合必須保留 numeric value_field。"
+                "嚴格依 validation_error.details 的 path 與 repair_hint 修復：\n"
                 if contract == "intent"
                 else "並符合目前的 x_field/y_field 圖表契約：\n"
             )

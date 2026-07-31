@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from calendar import monthrange
 from collections import Counter, defaultdict
 from datetime import date, datetime
 from statistics import mean, median, pstdev, stdev
@@ -341,7 +342,18 @@ class AnalysisRecipeExecutor:
             if series_column:
                 output["series"] = self._json_value(series)
             rows.append(output)
-        return self._bounded(rows)
+        bounded, warnings, summary = self._bounded(rows)
+        if (
+            inputs["aggregation"] == "count"
+            and inputs["period"] == "month"
+            and self._matches_calendar_month_days(rows)
+        ):
+            warnings.append(
+                "COUNT_RESULTS_MATCH_CALENDAR_PERIODS: Trend values match calendar "
+                "day counts; this chart reports record counts, not a numeric "
+                "measurement. Choose mean, sum, min, max, or median to analyze values."
+            )
+        return bounded, warnings, summary
 
     def _pareto(self, plan, frame):
         column = self._resolve(plan.recipe_inputs["category_field"], set(frame.columns))
@@ -1123,6 +1135,21 @@ class AnalysisRecipeExecutor:
             "min": lambda: min(numeric),
             "max": lambda: max(numeric),
         }[aggregation]()
+
+    @staticmethod
+    def _matches_calendar_month_days(rows: list[dict[str, Any]]) -> bool:
+        if len(rows) < 2:
+            return False
+        for row in rows:
+            period = str(row.get("period", ""))
+            try:
+                year_text, month_text = period.split("-", 1)
+                expected = monthrange(int(year_text), int(month_text))[1]
+            except (TypeError, ValueError):
+                return False
+            if row.get("value") != expected:
+                return False
+        return True
 
     def _bounded(
         self,

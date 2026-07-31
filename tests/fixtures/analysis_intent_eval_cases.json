@@ -1,0 +1,112 @@
+[
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_mean_zh",
+    "question": "依月份繪製數據值的平均折線圖",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "mean",
+      "value_field": "data.數據值",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_ambiguous_zh",
+    "question": "依月份繪製數據值折線圖",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "mean",
+      "value_field": "data.數據值",
+      "clarification_required": true
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_count_zh",
+    "question": "統計每月資料筆數並畫折線圖",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "count",
+      "value_field": null,
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_sum_zh",
+    "question": "按日加總產量並繪製趨勢",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "sum",
+      "value_field": "data.產量",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "machine_mean_zh",
+    "question": "比較各機台的平均良率",
+    "expected": {
+      "recipe_id": "category_summary",
+      "aggregation": "mean",
+      "value_field": "data.良率",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "shift_max_zh",
+    "question": "找出各班別的最高溫度",
+    "expected": {
+      "recipe_id": "category_summary",
+      "aggregation": "max",
+      "value_field": "data.溫度",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "defect_count_zh",
+    "question": "計算每種缺陷的發生次數",
+    "expected": {
+      "recipe_id": "category_summary",
+      "aggregation": "count",
+      "value_field": null,
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_median_en",
+    "question": "Plot the monthly median thickness trend",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "median",
+      "value_field": "data.Thickness",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_average_en",
+    "question": "Show average yield by week",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "mean",
+      "value_field": "data.Yield",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "trend_count_en",
+    "question": "Count inspection records per month",
+    "expected": {
+      "recipe_id": "trend_summary",
+      "aggregation": "count",
+      "value_field": null,
+      "clarification_required": false
+    }
+  }
+]

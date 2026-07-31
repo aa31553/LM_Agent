@@ -340,6 +340,7 @@ class AnalysisPlanDraftResponse(BaseModel):
     recipe_version: str | None = None
     compiler_version: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    clarification: dict[str, Any] | None = None
     normalization_actions: list[AnalysisNormalizationAction] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
     repair_attempted: bool = False
@@ -352,6 +353,7 @@ class AnalysisPlanDraftResponse(BaseModel):
 
 class AnalysisPlanDraftConfirmRequest(BaseModel):
     plan: AnalysisPlan | None = None
+    clarification_choice: str | None = Field(default=None, min_length=1, max_length=32)
 
 
 class AnalysisHybridRequest(BaseModel):

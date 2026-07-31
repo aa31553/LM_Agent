@@ -23,7 +23,8 @@ from app.schemas.analysis import (
     AnalysisPlanDraftCreate,
     AnalysisPlanDraftResponse,
 )
-from app.schemas.analysis_recipe import IntentDraft
+from app.schemas.analysis_recipe import AnalysisClarification, IntentDraft
+from app.services.analysis_intent_semantic_service import AnalysisIntentSemanticService
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
 from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
@@ -45,6 +46,7 @@ class AnalysisOrchestratorService:
         self.normalizer = AnalysisPlanNormalizer()
         self.repair_service = AnalysisPlanRepairService(self.llm_service)
         self.recipe_compiler = AnalysisRecipeCompiler()
+        self.semantic_service = AnalysisIntentSemanticService()
 
     async def create_draft(
         self,
@@ -113,7 +115,8 @@ class AnalysisOrchestratorService:
         allowed_file_ids = {str(source.id) for source in sources}
         manifests = {str(source.id): source.dataset_manifest for source in sources}
         normalized_intent_payload: dict
-        if settings.analysis_intent_flow_enabled and "recipe_id" in plan_payload:
+        clarification = None
+        if settings.analysis_intent_flow_enabled:
             candidate = self._with_default_source(plan_payload, default_source)
             try:
                 intent = IntentDraft.model_validate(candidate)
@@ -125,6 +128,7 @@ class AnalysisOrchestratorService:
                         plan_origin="llm_intent",
                     )
                 )
+                self.semantic_service.validate_explicit(payload.question, normalized)
                 repair_attempted = False
                 validation_errors = []
             except (APIError, ValidationError) as first_error:
@@ -157,6 +161,7 @@ class AnalysisOrchestratorService:
                         allowed_file_ids=allowed_file_ids,
                         plan_origin="llm_intent",
                     )
+                    self.semantic_service.validate_explicit(payload.question, normalized)
                 except (APIError, ValidationError) as repair_error:
                     raise self._repair_failed(
                         validation_errors[0],
@@ -172,6 +177,11 @@ class AnalysisOrchestratorService:
                 )
                 repair_attempted = True
             normalized_intent_payload = normalized_intent.model_dump(mode="json")
+            clarification = self.semantic_service.clarification(
+                payload.question,
+                normalized,
+                manifests,
+            )
         else:
             (
                 normalized,
@@ -204,6 +214,9 @@ class AnalysisOrchestratorService:
             recipe_version=normalized.recipe_version,
             compiler_version=normalized.compiler_version,
             warnings_json=warnings,
+            clarification_json=(
+                clarification.model_dump(mode="json") if clarification is not None else None
+            ),
             status=AnalysisPlanDraftStatus.VALIDATED.value,
         )
         self.db.add(draft)
@@ -259,6 +272,7 @@ class AnalysisOrchestratorService:
         principal: Principal,
         *,
         edited_plan: AnalysisPlan | None = None,
+        clarification_choice: str | None = None,
     ):
         draft = self.get(draft_id, principal, PermissionLevel.WRITE)
         if draft.status == AnalysisPlanDraftStatus.CONFIRMED.value:
@@ -268,6 +282,24 @@ class AnalysisOrchestratorService:
                 409,
             )
         plan = edited_plan or AnalysisPlan.model_validate(draft.plan_json)
+        clarification = (
+            AnalysisClarification.model_validate(draft.clarification_json)
+            if draft.clarification_json
+            else None
+        )
+        if clarification is not None and edited_plan is None:
+            if clarification_choice is None:
+                raise APIError(
+                    ErrorCode.ANALYSIS_CLARIFICATION_REQUIRED,
+                    "Select an aggregation before confirming this analysis draft.",
+                    409,
+                    details=clarification.model_dump(mode="json"),
+                )
+            plan = self.semantic_service.apply_choice(
+                plan,
+                clarification,
+                clarification_choice,
+            )
         if not plan.sources:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -329,6 +361,10 @@ class AnalysisOrchestratorService:
         draft.recipe_version = normalized.recipe_version
         draft.compiler_version = normalized.compiler_version
         draft.warnings_json = warnings
+        if clarification is not None:
+            draft.clarification_json = clarification.model_copy(
+                update={"selected_value": clarification_choice or "edited_plan"}
+            ).model_dump(mode="json")
         draft.status = AnalysisPlanDraftStatus.CONFIRMED.value
         draft.confirmed_at = datetime.utcnow()
         draft.updated_at = datetime.utcnow()
@@ -366,6 +402,7 @@ class AnalysisOrchestratorService:
             recipe_version=draft.recipe_version,
             compiler_version=draft.compiler_version,
             warnings=list(draft.warnings_json or []),
+            clarification=draft.clarification_json,
             normalization_actions=list(draft.normalization_actions_json or []),
             validation_errors=list(draft.validation_errors_json or []),
             repair_attempted=bool(draft.repair_attempted),
@@ -481,6 +518,11 @@ class AnalysisOrchestratorService:
     @staticmethod
     def _error_message(error: Exception) -> str:
         if isinstance(error, APIError):
+            if error.details:
+                return (
+                    f"{error.message} Details: "
+                    f"{json.dumps(error.details, ensure_ascii=False, default=str)}"
+                )
             return error.message
         return str(error)
 
@@ -497,6 +539,14 @@ class AnalysisOrchestratorService:
                             {
                                 "name": column.get("name"),
                                 "type": column.get("inferred_type"),
+                                "semantic_hint": column.get("semantic_type"),
+                                "unit": column.get("unit"),
+                                "null_rate": column.get("null_ratio"),
+                                "distinct_count": column.get("distinct_count"),
+                                "min": column.get("min"),
+                                "max": column.get("max"),
+                                "mean": column.get("mean"),
+                                "quantiles": column.get("quantiles", {}),
                                 "samples": column.get("sample_values", [])[:3],
                             }
                             for column in dataset.get("columns", [])
@@ -546,6 +596,11 @@ class AnalysisOrchestratorService:
                 f"{common}"
                 "只能使用提供的 file_id、sheet、欄位與白名單 Recipe。"
                 "優先輸出 recipe_id、inputs 與 sources，不要猜測圖表輸出欄位。"
+                "aggregation=count 只用於使用者明確要求筆數、件數或次數，"
+                "而且 count 時禁止輸出 value_field。"
+                "非 count 聚合必須提供 numeric value_field。"
+                "若使用者明確要求平均、合計、最大、最小或中位數，"
+                "aggregation 必須與該要求完全一致。"
                 "欄位重名時使用 alias.column；若需求不完整，選擇最保守的參數。"
             )
             user_prompt = (

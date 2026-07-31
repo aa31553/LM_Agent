@@ -260,6 +260,12 @@ class AnalysisRecipeCompiler:
                 else []
             ),
         }.get(recipe_id, [])
+        if (
+            recipe_id in {"category_summary", "trend_summary", "group_summary"}
+            and inputs.get("aggregation") != "count"
+            and inputs.get("value_field") is not None
+        ):
+            numeric_parameters = [*numeric_parameters, "value_field"]
         for name in numeric_parameters:
             references = inputs[name] if isinstance(inputs[name], list) else [inputs[name]]
             for reference in references:

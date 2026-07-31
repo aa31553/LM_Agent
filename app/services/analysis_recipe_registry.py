@@ -582,6 +582,33 @@ class AnalysisRecipeRegistry:
 
     @staticmethod
     def _validate_cross_parameters(recipe_id: str, inputs: dict[str, Any]) -> None:
+        if recipe_id in {"category_summary", "trend_summary", "group_summary"}:
+            aggregation = inputs.get("aggregation")
+            has_value_field = inputs.get("value_field") is not None
+            if aggregation == "count" and has_value_field:
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "count aggregation must not include value_field.",
+                    422,
+                    details={
+                        "path": "inputs.value_field",
+                        "aggregation": "count",
+                        "repair_hint": (
+                            "Remove value_field for record counts, or change aggregation "
+                            "to mean/sum/min/max/median to analyze the numeric field."
+                        ),
+                    },
+                )
+            if aggregation != "count" and not has_value_field:
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "A numeric value_field is required for non-count aggregation.",
+                    422,
+                    details={
+                        "path": "inputs.value_field",
+                        "aggregation": aggregation,
+                    },
+                )
         if recipe_id == "histogram":
             specified = [name for name in ("bin_width", "bin_count") if name in inputs]
             if len(specified) != 1:

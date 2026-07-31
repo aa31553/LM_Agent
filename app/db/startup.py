@@ -107,6 +107,7 @@ def _ensure_postgresql_schema() -> None:
             "recipe_id",
             "recipe_version",
             "compiler_version",
+            "clarification_json",
         }.issubset(draft_columns)
     )
     if needs_upgrade:
@@ -169,6 +170,7 @@ def _ensure_sqlite_schema() -> None:
                 "recipe_id": True,
                 "recipe_version": True,
                 "compiler_version": True,
+                "clarification_json": True,
             },
         ),
     )
@@ -352,6 +354,7 @@ def _validate_schema() -> None:
             "recipe_id",
             "recipe_version",
             "compiler_version",
+            "clarification_json",
         },
     }.items():
         columns = {column["name"] for column in inspector.get_columns(table_name)}

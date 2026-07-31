@@ -35,6 +35,7 @@ lm-agent-db-doctor = "app.db.doctor:main"
 lm-agent-office-check = "app.scripts.validate_office_com:main"
 lm-agent-llmwiki-reset = "app.cli.llmwiki:reset_main"
 lm-agent-llmwiki-discover = "app.cli.llmwiki:discover_main"
+lm-agent-eval-analysis-intents = "app.scripts.evaluate_analysis_intents:main"
 
 [project.optional-dependencies]
 dev = [

@@ -52,6 +52,22 @@ class IntentDraft(BaseModel):
     title: str | None = Field(default=None, max_length=255)
 
 
+class AnalysisClarificationOption(BaseModel):
+    value: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=255)
+    recipe_inputs_patch: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnalysisClarification(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
+    parameter: str = Field(min_length=1, max_length=64)
+    question: str = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=1, max_length=500)
+    options: list[AnalysisClarificationOption] = Field(min_length=2, max_length=8)
+    selected_value: str | None = Field(default=None, max_length=32)
+
+
 class AnalysisIntentValidateRequest(BaseModel):
     workspace_id: UUID
     intent: IntentDraft

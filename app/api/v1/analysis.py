@@ -50,9 +50,9 @@ from app.schemas.analysis_recipe import (
     RecipeListResponse,
     RecipeMetricsResponse,
 )
-from app.services.analysis_metrics_service import AnalysisMetricsService
 from app.services.analysis_artifact_service import AnalysisArtifactService
 from app.services.analysis_job_service import AnalysisJobService
+from app.services.analysis_metrics_service import AnalysisMetricsService
 from app.services.analysis_orchestrator_service import AnalysisOrchestratorService
 from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
 from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
@@ -600,6 +600,7 @@ def confirm_analysis_plan_draft(
         draft_id,
         principal,
         edited_plan=payload.plan,
+        clarification_choice=payload.clarification_choice,
     )
     return AnalysisJobService(db).response(job)
 
