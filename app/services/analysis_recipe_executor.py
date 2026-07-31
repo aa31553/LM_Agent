@@ -16,6 +16,7 @@ from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.schemas.analysis import AnalysisPlan, FilterCondition
 from app.services.analysis_chart_builder import AnalysisChartBuilder
+from app.services.analysis_filter_value_service import coerce_polars_filter_value
 from app.services.analysis_result_validator import AnalysisResultValidator
 
 
@@ -182,9 +183,10 @@ class AnalysisRecipeExecutor:
         filters: list[FilterCondition],
     ) -> pl.DataFrame:
         available = set(frame.columns)
-        for condition in filters:
+        for index, condition in enumerate(filters):
             column = self._resolve(condition.column, available)
             expression = pl.col(column)
+            value_path = f"filters[{index}].value"
             if condition.operator == "is_null":
                 predicate = expression.is_null()
             elif condition.operator == "not_null":
@@ -200,15 +202,29 @@ class AnalysisRecipeExecutor:
                     if isinstance(condition.value, list)
                     else [condition.value]
                 )
+                values = coerce_polars_filter_value(
+                    values,
+                    frame.schema[column],
+                    column=condition.column,
+                    operator=condition.operator,
+                    path=value_path,
+                )
                 predicate = expression.is_in(values)
             else:
+                target = coerce_polars_filter_value(
+                    condition.value,
+                    frame.schema[column],
+                    column=condition.column,
+                    operator=condition.operator,
+                    path=value_path,
+                )
                 predicate = {
-                    "eq": expression == condition.value,
-                    "ne": expression != condition.value,
-                    "gt": expression > condition.value,
-                    "gte": expression >= condition.value,
-                    "lt": expression < condition.value,
-                    "lte": expression <= condition.value,
+                    "eq": expression == target,
+                    "ne": expression != target,
+                    "gt": expression > target,
+                    "gte": expression >= target,
+                    "lt": expression < target,
+                    "lte": expression <= target,
                 }[condition.operator]
             frame = frame.filter(predicate)
         return frame

@@ -1,5 +1,5 @@
 import json
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.db.base import Base
 from app.models.analysis import AnalysisFile
-from app.schemas.analysis import AnalysisPlanDraftCreate, DatasetSource
+from app.schemas.analysis import AnalysisPlanDraftCreate, DatasetSource, FilterCondition
 from app.schemas.analysis_recipe import IntentDraft
 from app.services.analysis_intent_quality_service import AnalysisIntentQualityService
 from app.services.analysis_intent_semantic_service import AnalysisIntentSemanticService
@@ -80,12 +80,13 @@ def _manifest(tmp_path: Path, rows: list[dict]):
     }
 
 
-def _compile(file_id, manifest, inputs):
+def _compile(file_id, manifest, inputs, filters=None):
     return AnalysisRecipeCompiler().compile(
         IntentDraft(
             sources=[DatasetSource(file_id=file_id, alias="data", sheet="CSV")],
             recipe_id="trend_summary",
             inputs=inputs,
+            filters=filters or [],
         ),
         {str(file_id): manifest},
         allowed_file_ids={str(file_id)},
@@ -224,6 +225,176 @@ def test_daily_count_trend_warns_when_values_match_calendar_days(tmp_path: Path)
         warning.startswith("COUNT_RESULTS_MATCH_CALENDAR_PERIODS")
         for warning in result["summary"]["warnings"]
     )
+
+
+def test_between_filter_is_expanded_and_date_strings_execute(tmp_path: Path) -> None:
+    file_id, manifest = _manifest(
+        tmp_path,
+        [
+            {"時間": date(2025, 12, 31), "數據值": 1},
+            {"時間": date(2026, 1, 1), "數據值": 10},
+            {"時間": date(2026, 2, 28), "數據值": 20},
+            {"時間": date(2026, 3, 1), "數據值": 30},
+        ],
+    )
+    _intent, plan, actions, _warnings = _compile(
+        file_id,
+        manifest,
+        {
+            "date_field": "時間",
+            "value_field": "數據值",
+            "period": "month",
+            "aggregation": "mean",
+        },
+        filters=[
+            {
+                "column": "時間",
+                "operator": "between",
+                "value": ["2026-01-01", "2026-02-28"],
+            }
+        ],
+    )
+    assert [condition.operator for condition in plan.filters] == ["gte", "lt"]
+    assert plan.filters[1].value == "2026-03-01"
+    assert any(action["code"] == "FILTER_BETWEEN_EXPANDED" for action in actions)
+    assert any(
+        action["code"] == "TEMPORAL_INCLUSIVE_END_NORMALIZED"
+        for action in actions
+    )
+
+    result = AnalysisRecipeExecutor().execute(plan, {str(file_id): manifest})
+    assert result["summary"]["matched_rows"] == 2
+    assert result["table"]["rows"] == [
+        {"period": "2026-01", "value": 10},
+        {"period": "2026-02", "value": 20},
+    ]
+
+
+def test_temporal_filters_support_datetime_timezone_time_and_in() -> None:
+    executor = AnalysisRecipeExecutor()
+
+    datetime_frame = pl.DataFrame(
+        {
+            "data.時間": [
+                datetime.fromisoformat("2026-02-28T23:59:00"),
+                datetime.fromisoformat("2026-03-01T00:00:00"),
+            ]
+        }
+    )
+    filtered = executor._apply_filters(
+        datetime_frame,
+        [
+            FilterCondition(
+                column="data.時間",
+                operator="gte",
+                value="2026-01-01",
+            ),
+            FilterCondition(
+                column="data.時間",
+                operator="lt",
+                value="2026-03-01",
+            ),
+        ],
+    )
+    assert filtered["data.時間"].to_list() == [
+        datetime.fromisoformat("2026-02-28T23:59:00")
+    ]
+
+    timezone_frame = pl.DataFrame(
+        {
+            "data.時間": [
+                datetime(2026, 2, 28, 23, tzinfo=UTC),
+                datetime(2026, 3, 1, 1, tzinfo=UTC),
+            ]
+        }
+    )
+    filtered = executor._apply_filters(
+        timezone_frame,
+        [
+            FilterCondition(
+                column="data.時間",
+                operator="gte",
+                value="2026-02-28T23:00:00Z",
+            ),
+            FilterCondition(
+                column="data.時間",
+                operator="lt",
+                value="2026-03-01T00:00:00+00:00",
+            ),
+        ],
+    )
+    assert filtered.height == 1
+
+    date_frame = pl.DataFrame(
+        {"data.日期": [date(2026, 1, 1), date(2026, 1, 2)]}
+    )
+    filtered = executor._apply_filters(
+        date_frame,
+        [
+            FilterCondition(
+                column="data.日期",
+                operator="in",
+                value=["2026-01-02"],
+            )
+        ],
+    )
+    assert filtered["data.日期"].to_list() == [date(2026, 1, 2)]
+
+    time_frame = pl.DataFrame(
+        {"data.時刻": [time(8, 0), time(12, 30), time(17, 0)]}
+    )
+    filtered = executor._apply_filters(
+        time_frame,
+        [
+            FilterCondition(
+                column="data.時刻",
+                operator="gte",
+                value="12:30:00",
+            )
+        ],
+    )
+    assert filtered["data.時刻"].to_list() == [time(12, 30), time(17, 0)]
+
+
+def test_invalid_temporal_filter_is_rejected_before_execution(tmp_path: Path) -> None:
+    file_id, manifest = _manifest(
+        tmp_path,
+        [{"時間": date(2026, 1, 1), "數據值": 10}],
+    )
+    with pytest.raises(APIError) as error:
+        _compile(
+            file_id,
+            manifest,
+            {
+                "date_field": "時間",
+                "value_field": "數據值",
+                "period": "month",
+                "aggregation": "mean",
+            },
+            filters=[
+                {
+                    "column": "時間",
+                    "operator": "gte",
+                    "value": "2026-02-30",
+                }
+            ],
+        )
+    assert error.value.error_code == ErrorCode.RECIPE_PARAMETER_INVALID
+    assert error.value.status_code == 422
+    assert error.value.details["path"] == "filters[0].value"
+    assert error.value.details["expected_format"].startswith("YYYY-MM-DD")
+
+
+def test_filter_prompts_publish_operator_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "analysis_intent_flow_enabled", True)
+    system_prompt, _user_prompt = AnalysisOrchestratorService._planning_prompts(
+        question="比較一月和二月",
+        schema_context="{}",
+    )
+    assert "eq/ne/gt/gte/lt/lte/contains/in/is_null/not_null" in system_prompt
+    assert "不得使用 between" in system_prompt
 
 
 class _DraftLLM:

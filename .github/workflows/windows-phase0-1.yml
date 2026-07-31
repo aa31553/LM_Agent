@@ -47,6 +47,7 @@ jobs:
             app/schemas/analysis.py `
             app/schemas/analysis_recipe.py `
             app/services/analysis_chart_builder.py `
+            app/services/analysis_filter_value_service.py `
             app/services/analysis_job_service.py `
             app/services/analysis_metrics_service.py `
             app/services/analysis_orchestrator_service.py `
@@ -59,6 +60,7 @@ jobs:
             app/services/dataset_query_service.py `
             app/services/spreadsheet_ingestion_service.py `
             tests/test_analysis_recipes_phase2_4.py `
+            tests/test_analysis_intent_accuracy_p0_p2.py `
             tests/test_analysis_phase5_6.py `
             tests/test_analysis_plan_normalizer.py 2>&1
           $exitCode = $LASTEXITCODE
@@ -78,6 +80,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pytest -q `
+            tests/test_analysis_intent_accuracy_p0_p2.py `
             tests/test_analysis_phase5_6.py `
             tests/test_analysis_recipes_phase2_4.py `
             tests/test_analysis_plan_normalizer.py `

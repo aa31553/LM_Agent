@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 from pydantic import ValidationError
@@ -9,6 +10,7 @@ from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.schemas.analysis import AnalysisPlan, FilterCondition
 from app.schemas.analysis_recipe import IntentDraft
+from app.services.analysis_filter_value_service import validate_temporal_filter_value
 from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
 
 
@@ -76,7 +78,12 @@ class AnalysisRecipeCompiler:
                     for item in normalized_inputs[name]
                 ]
         self._validate_types(canonical_recipe_id, normalized_inputs, source_types)
-        filters = self._filters(intent.filters, source_columns)
+        filters, filter_actions = self._filters(
+            intent.filters,
+            source_columns,
+            source_types,
+        )
+        actions.extend(filter_actions)
         normalized_intent = intent.model_copy(
             update={
                 "recipe_id": canonical_recipe_id,
@@ -219,25 +226,130 @@ class AnalysisRecipeCompiler:
     def _filters(
         raw_filters: list[dict[str, Any]],
         source_columns: dict[str, list[dict[str, Any]]],
-    ) -> list[FilterCondition]:
+        source_types: dict[str, str],
+    ) -> tuple[list[FilterCondition], list[dict[str, Any]]]:
         filters: list[FilterCondition] = []
-        for raw_filter in raw_filters:
+        actions: list[dict[str, Any]] = []
+        for index, raw_filter in enumerate(raw_filters):
             candidate = dict(raw_filter)
             if "column" in candidate:
                 candidate["column"] = AnalysisRecipeCompiler._resolve_column(
                     str(candidate["column"]),
                     source_columns,
                 )
-            try:
-                filters.append(FilterCondition.model_validate(candidate))
-            except ValidationError as exc:
-                raise APIError(
-                    ErrorCode.RECIPE_PARAMETER_INVALID,
-                    "Intent contains an invalid filter.",
-                    422,
-                    details={"errors": exc.errors(include_url=False)},
-                ) from exc
-        return filters
+            candidates = AnalysisRecipeCompiler._expand_between_filter(candidate, index)
+            normalized_candidates = []
+            for expanded in candidates:
+                normalized, temporal_action = (
+                    AnalysisRecipeCompiler._normalize_temporal_end_filter(
+                        expanded,
+                        source_types.get(str(expanded.get("column")), "unknown"),
+                        index,
+                    )
+                )
+                normalized_candidates.append(normalized)
+                if temporal_action is not None:
+                    actions.append(temporal_action)
+            if candidate.get("operator") == "between":
+                actions.append(
+                    {
+                        "code": "FILTER_BETWEEN_EXPANDED",
+                        "path": f"filters[{index}]",
+                        "source_field": "between",
+                        "target_field": ",".join(
+                            str(item["operator"]) for item in normalized_candidates
+                        ),
+                    }
+                )
+            for expanded in normalized_candidates:
+                try:
+                    condition = FilterCondition.model_validate(expanded)
+                except ValidationError as exc:
+                    raise APIError(
+                        ErrorCode.RECIPE_PARAMETER_INVALID,
+                        "Intent contains an invalid filter.",
+                        422,
+                        details={"errors": exc.errors(include_url=False)},
+                    ) from exc
+                if condition.operator not in {
+                    "contains",
+                    "is_null",
+                    "not_null",
+                }:
+                    validate_temporal_filter_value(
+                        condition.value,
+                        source_types.get(condition.column, "unknown"),
+                        column=condition.column,
+                        operator=condition.operator,
+                        path=f"filters[{index}].value",
+                    )
+                filters.append(condition)
+        return filters, actions
+
+    @staticmethod
+    def _expand_between_filter(
+        candidate: dict[str, Any],
+        index: int,
+    ) -> list[dict[str, Any]]:
+        if candidate.get("operator") != "between":
+            return [candidate]
+        values = candidate.get("value")
+        if (
+            not isinstance(values, list)
+            or len(values) != 2
+            or values[0] is None
+            or values[1] is None
+        ):
+            raise APIError(
+                ErrorCode.RECIPE_PARAMETER_INVALID,
+                "between filter requires exactly two non-null boundary values.",
+                422,
+                details={
+                    "path": f"filters[{index}].value",
+                    "operator": "between",
+                    "value": values,
+                    "repair_hint": (
+                        "Provide [start, end], or use separate gte and lte filters."
+                    ),
+                },
+            )
+        base = {key: value for key, value in candidate.items() if key != "value"}
+        return [
+            {**base, "operator": "gte", "value": values[0]},
+            {**base, "operator": "lte", "value": values[1]},
+        ]
+
+    @staticmethod
+    def _normalize_temporal_end_filter(
+        candidate: dict[str, Any],
+        inferred_type: str,
+        index: int,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        value = candidate.get("value")
+        if (
+            inferred_type != "datetime"
+            or candidate.get("operator") != "lte"
+            or not isinstance(value, str)
+        ):
+            return candidate, None
+        try:
+            inclusive_end = date.fromisoformat(value.strip())
+        except ValueError:
+            return candidate, None
+        exclusive_end = inclusive_end + timedelta(days=1)
+        return (
+            {
+                **candidate,
+                "operator": "lt",
+                "value": exclusive_end.isoformat(),
+            },
+            {
+                "code": "TEMPORAL_INCLUSIVE_END_NORMALIZED",
+                "path": f"filters[{index}]",
+                "source_field": value,
+                "target_field": exclusive_end.isoformat(),
+            },
+        )
 
     @staticmethod
     def _validate_types(

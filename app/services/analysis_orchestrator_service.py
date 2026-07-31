@@ -601,6 +601,10 @@ class AnalysisOrchestratorService:
                 "非 count 聚合必須提供 numeric value_field。"
                 "若使用者明確要求平均、合計、最大、最小或中位數，"
                 "aggregation 必須與該要求完全一致。"
+                "filter operator 只允許 eq/ne/gt/gte/lt/lte/contains/in/"
+                "is_null/not_null；日期範圍使用兩個 filter"
+                "（gte 起日、lt 迄日後一天），"
+                "不得使用 between。"
                 "欄位重名時使用 alias.column；若需求不完整，選擇最保守的參數。"
             )
             user_prompt = (
