@@ -5,7 +5,7 @@ import json
 import math
 from collections import Counter, defaultdict
 from datetime import date, datetime
-from statistics import mean, median, stdev
+from statistics import mean, median, pstdev, stdev
 from typing import Any, Callable
 
 import polars as pl
@@ -117,6 +117,14 @@ class AnalysisRecipeExecutor:
             "date_parts": self._date_parts,
             "derive_arithmetic": self._derive_arithmetic,
             "pivot_table": self._pivot_table,
+            "descriptive_statistics": self._descriptive_statistics,
+            "boxplot_summary": self._boxplot_summary,
+            "outlier_iqr": self._outlier_iqr,
+            "correlation_matrix": self._correlation_matrix,
+            "yield_summary": self._yield_summary,
+            "spec_judgement": self._spec_judgement,
+            "process_capability": self._process_capability,
+            "control_chart": self._control_chart,
         }
         handler = handlers.get(recipe_id)
         if handler is None:
@@ -556,6 +564,468 @@ class AnalysisRecipeExecutor:
             )
         return self._bounded(rows)
 
+    def _descriptive_statistics(self, plan, frame):
+        inputs = plan.recipe_inputs
+        column = self._resolve(inputs["source_field"], set(frame.columns))
+        raw_values = frame[column].to_list()
+        values = self._numeric_values(raw_values)
+        std_mode = inputs["std_mode"]
+        standard_deviation = None
+        if len(values) >= (2 if std_mode == "sample" else 1):
+            standard_deviation = stdev(values) if std_mode == "sample" else pstdev(values)
+        row = {
+            "count": len(values),
+            "null_count": len(raw_values) - len(values),
+            "mean": self._clean_number(mean(values)) if values else None,
+            "median": self._clean_number(median(values)) if values else None,
+            "std": self._clean_number(standard_deviation),
+            "std_definition": std_mode,
+            "min": self._clean_number(min(values)) if values else None,
+            "q1": self._clean_number(self._quantile(values, 0.25)),
+            "q3": self._clean_number(self._quantile(values, 0.75)),
+            "max": self._clean_number(max(values)) if values else None,
+        }
+        warnings = []
+        if not values:
+            warnings.append("The source contains no finite numeric values.")
+        elif standard_deviation is None:
+            warnings.append(
+                f"{std_mode.title()} standard deviation requires more observations."
+            )
+        return [row], warnings, {
+            "statistical_definition": {
+                "quantile_method": "linear interpolation",
+                "std": std_mode,
+            }
+        }
+
+    def _boxplot_summary(self, plan, frame):
+        inputs = plan.recipe_inputs
+        value_column = self._resolve(inputs["source_field"], set(frame.columns))
+        group_column = self._optional_column(inputs.get("group_field"), frame)
+        groups: dict[Any, list[float]] = defaultdict(list)
+        selected = [value_column, *([group_column] if group_column else [])]
+        for row in frame.select(selected).iter_rows(named=True):
+            numeric = self._finite_float(row[value_column])
+            if numeric is not None:
+                groups[row[group_column] if group_column else "all"].append(numeric)
+        rows = []
+        warnings = []
+        for group, values in sorted(groups.items(), key=lambda item: str(item[0])):
+            q1 = self._quantile(values, 0.25)
+            q3 = self._quantile(values, 0.75)
+            med = self._quantile(values, 0.5)
+            assert q1 is not None and q3 is not None and med is not None
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            inliers = [value for value in values if lower <= value <= upper]
+            outliers = [value for value in values if value < lower or value > upper]
+            bounded_outliers = outliers[: settings.analysis_chart_max_points]
+            if len(outliers) > len(bounded_outliers):
+                warnings.append(
+                    "Boxplot outlier values were truncated to the chart point limit."
+                )
+            rows.append(
+                {
+                    "group": self._json_value(group),
+                    "min": self._clean_number(min(inliers)) if inliers else None,
+                    "q1": self._clean_number(q1),
+                    "median": self._clean_number(med),
+                    "q3": self._clean_number(q3),
+                    "max": self._clean_number(max(inliers)) if inliers else None,
+                    "whisker_low": self._clean_number(lower),
+                    "whisker_high": self._clean_number(upper),
+                    "outlier_count": len(outliers),
+                    "outliers": [self._clean_number(value) for value in bounded_outliers],
+                }
+            )
+        if not rows:
+            warnings.append("The source contains no finite numeric values.")
+        bounded, bounded_warnings, extra = self._bounded(rows)
+        return bounded, [*warnings, *bounded_warnings], {
+            **extra,
+            "whisker_definition": "1.5 IQR",
+        }
+
+    def _outlier_iqr(self, plan, frame):
+        column = self._resolve(plan.recipe_inputs["source_field"], set(frame.columns))
+        values = self._numeric_values(frame[column].to_list())
+        if not values:
+            return [], ["The source contains no finite numeric values."], {
+                "whisker_definition": "1.5 IQR"
+            }
+        q1 = self._quantile(values, 0.25)
+        q3 = self._quantile(values, 0.75)
+        assert q1 is not None and q3 is not None
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        outlier_count = sum(value < lower or value > upper for value in values)
+        return [
+            {
+                "lower_bound": self._clean_number(lower),
+                "upper_bound": self._clean_number(upper),
+                "outlier_count": outlier_count,
+                "outlier_ratio": outlier_count / len(values),
+            }
+        ], [], {
+            "sample_size": len(values),
+            "q1": self._clean_number(q1),
+            "q3": self._clean_number(q3),
+            "whisker_definition": "1.5 IQR",
+        }
+
+    def _correlation_matrix(self, plan, frame):
+        inputs = plan.recipe_inputs
+        fields = [
+            self._resolve(reference, set(frame.columns))
+            for reference in inputs["fields"]
+        ]
+        method = inputs["method"]
+        rows = []
+        for x_field in fields:
+            for y_field in fields:
+                pairs = []
+                pair_rows = (
+                    ((value, value) for value in frame[x_field].to_list())
+                    if x_field == y_field
+                    else frame.select([x_field, y_field]).iter_rows()
+                )
+                for x_value, y_value in pair_rows:
+                    x_number = self._finite_float(x_value)
+                    y_number = self._finite_float(y_value)
+                    if x_number is not None and y_number is not None:
+                        pairs.append((x_number, y_number))
+                if method == "spearman":
+                    x_values = self._ranks([pair[0] for pair in pairs])
+                    y_values = self._ranks([pair[1] for pair in pairs])
+                else:
+                    x_values = [pair[0] for pair in pairs]
+                    y_values = [pair[1] for pair in pairs]
+                correlation = self._pearson(x_values, y_values)
+                rows.append(
+                    {
+                        "x_category": x_field,
+                        "y_category": y_field,
+                        "value": self._clean_number(correlation),
+                        "sample_size": len(pairs),
+                        "method": method,
+                    }
+                )
+        return rows, [
+            "Correlation describes association and does not imply causation."
+        ], {
+            "correlation_method": method,
+            "pairwise_null_handling": "pairwise complete observations",
+        }
+
+    def _yield_summary(self, plan, frame):
+        inputs = plan.recipe_inputs
+        column = self._resolve(inputs["status_field"], set(frame.columns))
+        ok_values = {str(value) for value in inputs["ok_values"]}
+        populated = [value for value in frame[column].to_list() if value is not None]
+        ok_count = sum(str(value) in ok_values for value in populated)
+        ng_count = len(populated) - ok_count
+        total = len(populated)
+        rows = [
+            {"status": "OK", "count": ok_count, "ratio": ok_count / total if total else 0},
+            {"status": "NG", "count": ng_count, "ratio": ng_count / total if total else 0},
+        ]
+        warnings = [] if total else ["The status field contains no non-null values."]
+        return rows, warnings, {
+            "sample_size": total,
+            "ok_count": ok_count,
+            "ng_count": ng_count,
+            "null_count": frame.height - total,
+            "yield_rate": ok_count / total if total else None,
+            "ok_values": sorted(ok_values),
+        }
+
+    def _spec_judgement(self, plan, frame):
+        inputs = plan.recipe_inputs
+        column = self._resolve(inputs["source_field"], set(frame.columns))
+        raw_values = frame[column].to_list()
+        values = self._numeric_values(raw_values)
+        lsl = inputs.get("lsl")
+        usl = inputs.get("usl")
+        inclusive = inputs["inclusive"]
+        below = 0
+        above = 0
+        within = 0
+        for value in values:
+            is_below = value < lsl if lsl is not None else False
+            is_above = value > usl if usl is not None else False
+            if not inclusive:
+                is_below = value <= lsl if lsl is not None else False
+                is_above = value >= usl if usl is not None else False
+            if is_below:
+                below += 1
+            elif is_above:
+                above += 1
+            else:
+                within += 1
+        total = len(values)
+        rows = [
+            {
+                "status": "below_lsl",
+                "count": below,
+                "ratio": below / total if total else 0,
+            },
+            {
+                "status": "within_spec",
+                "count": within,
+                "ratio": within / total if total else 0,
+            },
+            {
+                "status": "above_usl",
+                "count": above,
+                "ratio": above / total if total else 0,
+            },
+        ]
+        return rows, ([] if total else ["The source contains no finite numeric values."]), {
+            "sample_size": total,
+            "lsl": lsl,
+            "usl": usl,
+            "inclusive": inclusive,
+            "below_lsl_count": below,
+            "within_spec_count": within,
+            "above_usl_count": above,
+            "null_count": len(raw_values) - total,
+        }
+
+    def _process_capability(self, plan, frame):
+        inputs = plan.recipe_inputs
+        column = self._resolve(inputs["source_field"], set(frame.columns))
+        values = self._numeric_values(frame[column].to_list())
+        lsl = float(inputs["lsl"])
+        usl = float(inputs["usl"])
+        sample_size = len(values)
+        average = mean(values) if values else None
+        overall_std = stdev(values) if sample_size > 1 else None
+        moving_ranges = [
+            abs(right - left)
+            for left, right in zip(values, values[1:], strict=False)
+        ]
+        mr_bar = mean(moving_ranges) if moving_ranges else None
+        within_std = mr_bar / 1.128 if mr_bar is not None else None
+
+        def capability(sigma: float | None) -> tuple[float | None, float | None]:
+            if sigma is None or sigma <= 0 or average is None:
+                return None, None
+            potential = (usl - lsl) / (6 * sigma)
+            centered = min(
+                (usl - average) / (3 * sigma),
+                (average - lsl) / (3 * sigma),
+            )
+            return potential, centered
+
+        cp, cpk = capability(within_std)
+        pp, ppk = capability(overall_std)
+        row = {
+            "sample_size": sample_size,
+            "mean": self._clean_number(average),
+            "within_std": self._clean_number(within_std),
+            "overall_std": self._clean_number(overall_std),
+            "lsl": self._clean_number(lsl),
+            "usl": self._clean_number(usl),
+            "cp": self._clean_number(cp),
+            "cpk": self._clean_number(cpk),
+            "pp": self._clean_number(pp),
+            "ppk": self._clean_number(ppk),
+        }
+        warnings = []
+        minimum = inputs["minimum_sample_size"]
+        if sample_size < minimum:
+            warnings.append(
+                f"Process capability has fewer than the configured {minimum} observations."
+            )
+        warnings.append(
+            "Capability indices assume a stable, approximately normal process."
+        )
+        if within_std is None or within_std <= 0:
+            warnings.append("Cp/Cpk are undefined because within sigma is unavailable or zero.")
+        if overall_std is None or overall_std <= 0:
+            warnings.append("Pp/Ppk are undefined because overall sample sigma is unavailable or zero.")
+        return [row], warnings, {
+            "calculation_parameters": {
+                "within_sigma": "MRbar/d2",
+                "d2": 1.128,
+                "overall_sigma": "sample standard deviation (n-1)",
+                "minimum_sample_size": minimum,
+            }
+        }
+
+    def _control_chart(self, plan, frame):
+        chart_type = plan.recipe_inputs["chart_type"]
+        if chart_type == "i_mr":
+            return self._control_chart_i_mr(plan, frame)
+        if chart_type == "xbar_r":
+            return self._control_chart_xbar_r(plan, frame)
+        return self._control_chart_p(plan, frame)
+
+    def _control_chart_i_mr(self, plan, frame):
+        inputs = plan.recipe_inputs
+        value_column = self._resolve(inputs["source_field"], set(frame.columns))
+        order_column = self._optional_column(inputs.get("order_field"), frame)
+        records = []
+        selected = [value_column, *([order_column] if order_column else [])]
+        for index, row in enumerate(frame.select(selected).iter_rows(named=True), start=1):
+            value = self._finite_float(row[value_column])
+            if value is not None:
+                records.append((row[order_column] if order_column else index, value))
+        if order_column:
+            records.sort(key=lambda item: str(item[0]))
+        values = [record[1] for record in records]
+        if not values:
+            return [], ["The source contains no finite numeric values."], {
+                "control_chart_type": "i_mr"
+            }
+        center = mean(values)
+        moving_ranges = [
+            abs(right - left)
+            for left, right in zip(values, values[1:], strict=False)
+        ]
+        mr_bar = mean(moving_ranges) if moving_ranges else 0
+        sigma = mr_bar / 1.128
+        ucl = center + 3 * sigma
+        lcl = center - 3 * sigma
+        rows = [
+            {
+                "period": self._json_value(period),
+                "value": self._clean_number(value),
+                "center_line": self._clean_number(center),
+                "ucl": self._clean_number(ucl),
+                "lcl": self._clean_number(lcl),
+            }
+            for period, value in records
+        ]
+        warnings = [] if len(values) >= 2 else ["I-MR requires at least two observations."]
+        return rows, warnings, {
+            "control_chart_type": "i_mr",
+            "sample_size": len(values),
+            "moving_range_center_line": self._clean_number(mr_bar),
+            "moving_range_ucl": self._clean_number(3.267 * mr_bar),
+            "moving_range_lcl": 0,
+            "sigma_definition": "MRbar/1.128",
+        }
+
+    def _control_chart_xbar_r(self, plan, frame):
+        inputs = plan.recipe_inputs
+        value_column = self._resolve(inputs["source_field"], set(frame.columns))
+        subgroup_column = self._resolve(inputs["subgroup_field"], set(frame.columns))
+        groups: dict[Any, list[float]] = defaultdict(list)
+        for subgroup, raw_value in frame.select(
+            [subgroup_column, value_column]
+        ).iter_rows():
+            value = self._finite_float(raw_value)
+            if value is not None:
+                groups[subgroup].append(value)
+        populated = [(group, values) for group, values in groups.items() if values]
+        if not populated:
+            return [], ["No populated subgroups are available."], {
+                "control_chart_type": "xbar_r"
+            }
+        sizes = {len(values) for _, values in populated}
+        if len(sizes) != 1:
+            raise APIError(
+                ErrorCode.RECIPE_PARAMETER_INVALID,
+                "Xbar-R requires equal subgroup sizes.",
+                422,
+                details={"subgroup_sizes": sorted(sizes)},
+            )
+        subgroup_size = sizes.pop()
+        constants = {
+            2: (1.880, 0.000, 3.267),
+            3: (1.023, 0.000, 2.574),
+            4: (0.729, 0.000, 2.282),
+            5: (0.577, 0.000, 2.114),
+            6: (0.483, 0.000, 2.004),
+            7: (0.419, 0.076, 1.924),
+            8: (0.373, 0.136, 1.864),
+            9: (0.337, 0.184, 1.816),
+            10: (0.308, 0.223, 1.777),
+        }
+        if subgroup_size not in constants:
+            raise APIError(
+                ErrorCode.RECIPE_PARAMETER_INVALID,
+                "Xbar-R supports subgroup sizes from 2 through 10.",
+                422,
+                details={"subgroup_size": subgroup_size},
+            )
+        subgroup_stats = [
+            (group, mean(values), max(values) - min(values))
+            for group, values in sorted(populated, key=lambda item: str(item[0]))
+        ]
+        xbar_bar = mean(item[1] for item in subgroup_stats)
+        r_bar = mean(item[2] for item in subgroup_stats)
+        a2, d3, d4 = constants[subgroup_size]
+        rows = [
+            {
+                "period": self._json_value(group),
+                "value": self._clean_number(group_mean),
+                "center_line": self._clean_number(xbar_bar),
+                "ucl": self._clean_number(xbar_bar + a2 * r_bar),
+                "lcl": self._clean_number(xbar_bar - a2 * r_bar),
+            }
+            for group, group_mean, _group_range in subgroup_stats
+        ]
+        return rows, [], {
+            "control_chart_type": "xbar_r",
+            "subgroup_count": len(subgroup_stats),
+            "subgroup_size": subgroup_size,
+            "range_center_line": self._clean_number(r_bar),
+            "range_ucl": self._clean_number(d4 * r_bar),
+            "range_lcl": self._clean_number(d3 * r_bar),
+            "constants": {"A2": a2, "D3": d3, "D4": d4},
+        }
+
+    def _control_chart_p(self, plan, frame):
+        inputs = plan.recipe_inputs
+        status_column = self._resolve(inputs["status_field"], set(frame.columns))
+        subgroup_column = self._resolve(inputs["subgroup_field"], set(frame.columns))
+        ok_values = {str(value) for value in inputs["ok_values"]}
+        groups: dict[Any, list[Any]] = defaultdict(list)
+        for subgroup, status in frame.select(
+            [subgroup_column, status_column]
+        ).iter_rows():
+            if status is not None:
+                groups[subgroup].append(status)
+        stats = []
+        total_count = 0
+        total_defects = 0
+        for subgroup, statuses in sorted(groups.items(), key=lambda item: str(item[0])):
+            defects = sum(str(status) not in ok_values for status in statuses)
+            count = len(statuses)
+            total_count += count
+            total_defects += defects
+            stats.append((subgroup, defects / count, count))
+        if not stats:
+            return [], ["No populated subgroups are available."], {
+                "control_chart_type": "p"
+            }
+        p_bar = total_defects / total_count
+        rows = []
+        for subgroup, proportion, count in stats:
+            sigma = math.sqrt(p_bar * (1 - p_bar) / count)
+            rows.append(
+                {
+                    "period": self._json_value(subgroup),
+                    "value": self._clean_number(proportion),
+                    "center_line": self._clean_number(p_bar),
+                    "ucl": self._clean_number(min(1, p_bar + 3 * sigma)),
+                    "lcl": self._clean_number(max(0, p_bar - 3 * sigma)),
+                }
+            )
+        return rows, [], {
+            "control_chart_type": "p",
+            "subgroup_count": len(stats),
+            "sample_size": total_count,
+            "defect_count": total_defects,
+            "ok_values": sorted(ok_values),
+            "limit_definition": "pbar ± 3*sqrt(pbar*(1-pbar)/n)",
+        }
+
     def _group_values(
         self,
         frame: pl.DataFrame,
@@ -572,6 +1042,65 @@ class AnalysisRecipeExecutor:
             (key, self._aggregate_values(values, aggregation))
             for key, values in groups.items()
         ]
+
+    @staticmethod
+    def _finite_float(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @classmethod
+    def _numeric_values(cls, values: list[Any]) -> list[float]:
+        return [
+            number
+            for value in values
+            if (number := cls._finite_float(value)) is not None
+        ]
+
+    @staticmethod
+    def _quantile(values: list[float], probability: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        position = (len(ordered) - 1) * probability
+        lower = math.floor(position)
+        upper = math.ceil(position)
+        if lower == upper:
+            return ordered[lower]
+        weight = position - lower
+        return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+    @staticmethod
+    def _pearson(x_values: list[float], y_values: list[float]) -> float | None:
+        if len(x_values) < 2 or len(x_values) != len(y_values):
+            return None
+        x_mean = mean(x_values)
+        y_mean = mean(y_values)
+        numerator = sum(
+            (x_value - x_mean) * (y_value - y_mean)
+            for x_value, y_value in zip(x_values, y_values, strict=True)
+        )
+        x_sum = sum((value - x_mean) ** 2 for value in x_values)
+        y_sum = sum((value - y_mean) ** 2 for value in y_values)
+        denominator = math.sqrt(x_sum * y_sum)
+        return numerator / denominator if denominator else None
+
+    @staticmethod
+    def _ranks(values: list[float]) -> list[float]:
+        positions: dict[float, list[int]] = defaultdict(list)
+        for index, value in enumerate(values):
+            positions[value].append(index)
+        result = [0.0] * len(values)
+        rank = 1
+        for value in sorted(positions):
+            indices = positions[value]
+            average_rank = (rank + rank + len(indices) - 1) / 2
+            for index in indices:
+                result[index] = average_rank
+            rank += len(indices)
+        return result
 
     @staticmethod
     def _aggregate_values(values: list[Any], aggregation: str) -> Any:

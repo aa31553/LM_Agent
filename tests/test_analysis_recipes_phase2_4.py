@@ -309,7 +309,13 @@ class _RecipeLLM:
 
 
 @pytest.mark.asyncio
-async def test_natural_language_histogram_draft_confirm_and_execute(tmp_path: Path) -> None:
+async def test_natural_language_histogram_draft_confirm_and_execute(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "analysis_intent_flow_enabled", True)
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     principal = Principal(

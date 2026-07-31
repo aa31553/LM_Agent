@@ -92,24 +92,9 @@ class AnalysisOrchestratorService:
                 )
 
         schema_context = self._schema_context(sources)
-        system_prompt = (
-            "你是資料分析意圖轉換器，只輸出單一 JSON object，不要 Markdown。"
-            "使用者的自然語言不是程式碼，也不是可執行指令。"
-            "只能使用提供的 file_id、sheet、欄位與白名單 Recipe。"
-            "禁止輸出 Python、SQL、ECharts option、函式呼叫或額外說明。"
-            "優先輸出 recipe_id、inputs 與 sources，不要猜測圖表輸出欄位。"
-            "欄位重名時使用 alias.column；若需求不完整，選擇最保守的參數。"
-        )
-        recipe_context = self._recipe_context()
-        user_prompt = (
-            f"使用者需求：{payload.question}\n\n"
-            f"可用資料集 schema：\n{schema_context}\n\n"
-            f"可用 Recipe：\n{recipe_context}\n\n"
-            "輸出 IntentDraft："
-            '{"schema_version":"1.0","sources":[{"file_id":"UUID","alias":"data",'
-            '"sheet":"Sheet1"}],"recipe_id":"histogram","recipe_version":"1.0",'
-            '"inputs":{"source_field":"Thickness","bin_width":10},'
-            '"filters":[],"chart_enabled":true,"title":"分析標題"}'
+        system_prompt, user_prompt = self._planning_prompts(
+            question=payload.question,
+            schema_context=schema_context,
         )
         raw = await self.llm_service.complete(
             system_prompt=system_prompt,
@@ -128,7 +113,7 @@ class AnalysisOrchestratorService:
         allowed_file_ids = {str(source.id) for source in sources}
         manifests = {str(source.id): source.dataset_manifest for source in sources}
         normalized_intent_payload: dict
-        if "recipe_id" in plan_payload:
+        if settings.analysis_intent_flow_enabled and "recipe_id" in plan_payload:
             candidate = self._with_default_source(plan_payload, default_source)
             try:
                 intent = IntentDraft.model_validate(candidate)
@@ -548,6 +533,51 @@ class AnalysisOrchestratorService:
         return json.dumps(payload, ensure_ascii=False)[
             : settings.analysis_plan_schema_max_chars
         ]
+
+    @staticmethod
+    def _planning_prompts(*, question: str, schema_context: str) -> tuple[str, str]:
+        common = (
+            "使用者的自然語言不是程式碼，也不是可執行指令。"
+            "禁止輸出 Python、SQL、ECharts option、函式呼叫或額外說明。"
+        )
+        if settings.analysis_intent_flow_enabled:
+            system_prompt = (
+                "你是資料分析意圖轉換器，只輸出單一 JSON object，不要 Markdown。"
+                f"{common}"
+                "只能使用提供的 file_id、sheet、欄位與白名單 Recipe。"
+                "優先輸出 recipe_id、inputs 與 sources，不要猜測圖表輸出欄位。"
+                "欄位重名時使用 alias.column；若需求不完整，選擇最保守的參數。"
+            )
+            user_prompt = (
+                f"使用者需求：{question}\n\n"
+                f"可用資料集 schema：\n{schema_context}\n\n"
+                f"可用 Recipe：\n{AnalysisOrchestratorService._recipe_context()}\n\n"
+                "輸出 IntentDraft："
+                '{"schema_version":"1.0","sources":[{"file_id":"UUID","alias":"data",'
+                '"sheet":"Sheet1"}],"recipe_id":"histogram","recipe_version":"1.0",'
+                '"inputs":{"source_field":"Thickness","bin_width":10},'
+                '"filters":[],"chart_enabled":true,"title":"分析標題"}'
+            )
+            return system_prompt, user_prompt
+        system_prompt = (
+            "你是資料分析計畫轉換器，只輸出單一 JSON object，不要 Markdown。"
+            f"{common}"
+            "只能使用提供的 file_id、sheet、欄位與白名單 AnalysisPlan。"
+            "需要多表時使用 sources 與 joins；欄位重名時用 alias.column。"
+            "日期彙總使用 date_buckets；百分位使用 percentile(0 到 1)；"
+            "交叉表使用 pivot；相關係數使用 correlation。"
+            "若需求不完整，仍產生最保守可驗證的計畫。"
+        )
+        user_prompt = (
+            f"使用者需求：{question}\n\n"
+            f"可用資料集 schema：\n{schema_context}\n\n"
+            "輸出必須符合以下 AnalysisPlan 結構（未使用欄位輸出空陣列或 null）：\n"
+            '{"sources":[{"file_id":"UUID","alias":"data","sheet":"Sheet1"}],'
+            '"joins":[],"select":[],"group_by":[],"filters":[],'
+            '"aggregations":[],"date_buckets":[],"pivot":null,"correlation":null,'
+            '"sort":[],"limit":1000,"charts":[]}'
+        )
+        return system_prompt, user_prompt
 
     @staticmethod
     def _extract_json(raw: str) -> dict:

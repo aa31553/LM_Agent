@@ -48,7 +48,9 @@ from app.schemas.analysis_recipe import (
     AnalysisIntentValidationResponse,
     RecipeDefinition,
     RecipeListResponse,
+    RecipeMetricsResponse,
 )
+from app.services.analysis_metrics_service import AnalysisMetricsService
 from app.services.analysis_artifact_service import AnalysisArtifactService
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.analysis_orchestrator_service import AnalysisOrchestratorService
@@ -69,10 +71,20 @@ from app.utils.llm_usage import get_llm_token_usage, reset_llm_token_usage
 router = APIRouter()
 
 
+def _ensure_recipes_enabled() -> None:
+    if not settings.analysis_recipes_enabled:
+        raise APIError(
+            ErrorCode.RECIPE_NOT_FOUND,
+            "Analysis recipes are disabled by the rollout feature flag.",
+            503,
+        )
+
+
 @router.get("/recipes", response_model=RecipeListResponse)
 def list_analysis_recipes(
     _principal: Principal = Depends(get_current_principal),
 ) -> RecipeListResponse:
+    _ensure_recipes_enabled()
     return RecipeListResponse(items=AnalysisRecipeRegistry().list_enabled())
 
 
@@ -82,6 +94,7 @@ def get_analysis_recipe(
     version: str = Query(default="1.0", min_length=1, max_length=16),
     _principal: Principal = Depends(get_current_principal),
 ) -> RecipeDefinition:
+    _ensure_recipes_enabled()
     return AnalysisRecipeRegistry().get(recipe_id, version)
 
 
@@ -94,6 +107,7 @@ def validate_analysis_intent(
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> AnalysisIntentValidationResponse:
+    _ensure_recipes_enabled()
     workspace = WorkspaceService(db).get(
         payload.workspace_id,
         principal,
@@ -137,6 +151,15 @@ def validate_analysis_intent(
         normalization_actions=actions,
         warnings=warnings,
     )
+
+
+@router.get("/metrics/recipes", response_model=RecipeMetricsResponse)
+def get_analysis_recipe_metrics(
+    workspace_id: UUID,
+    principal: Principal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> RecipeMetricsResponse:
+    return AnalysisMetricsService(db).summarize(workspace_id, principal)
 
 
 @router.post("/files/upload", response_model=AnalysisFileUploadResponse)

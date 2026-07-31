@@ -382,6 +382,10 @@ through Chat retrieval.
 | GET | `/analysis/files/{file_id}/inspect` | workspace-read | path UUID | `SpreadsheetInspectionResponse` |
 | POST | `/analysis/files/{file_id}/profile/retry` | workspace-write | path UUID | `AnalysisFileUploadResponse`, HTTP 202 |
 | DELETE | `/analysis/files/{file_id}` | workspace-write | path UUID | 204 |
+| GET | `/analysis/recipes` | authenticated | none | `RecipeListResponse` |
+| GET | `/analysis/recipes/{recipe_id}` | authenticated | `version=1.0` | `RecipeDefinition` |
+| POST | `/analysis/intents/validate` | workspace-read | `AnalysisIntentValidateRequest` | `AnalysisIntentValidationResponse` |
+| GET | `/analysis/metrics/recipes` | workspace-read | `workspace_id` | `RecipeMetricsResponse` |
 | POST | `/analysis/plans/validate` | workspace-read | `AnalysisPlanValidateRequest` | `AnalysisPlanValidationResponse` |
 | POST | `/analysis/plan-drafts` | workspace-write + LLM | `AnalysisPlanDraftCreate` | `AnalysisPlanDraftResponse`, HTTP 201 |
 | GET | `/analysis/plan-drafts/{draft_id}` | workspace-read | path UUID | `AnalysisPlanDraftResponse` |
@@ -961,3 +965,15 @@ strings, and builds the result and chart contracts after execution.
 
 When a column name is duplicated, use the supplied `column_id` or
 `source_alias.column_name`. Never guess between candidates.
+
+Phase 5 quality Recipe IDs are `descriptive_statistics`, `boxplot_summary`,
+`outlier_iqr`, `correlation_matrix`, `yield_summary`, `spec_judgement`,
+`process_capability`, and `control_chart`. Preserve backend results and warnings
+verbatim: correlation is not causation; capability uses the returned sigma
+definitions; control chart type and subgroup assumptions must not be changed by the
+LLM.
+
+When `ANALYSIS_INTENT_FLOW_ENABLED=false`, natural-language planning uses the legacy
+AnalysisPlan contract. When `ANALYSIS_RECIPES_ENABLED=false`, do not retry Recipe
+requests; use the still-supported legacy plan route only when it can represent the
+requested operation.

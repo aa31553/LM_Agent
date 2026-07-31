@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime
 from uuid import UUID
 
@@ -35,6 +36,7 @@ from app.services.workspace_service import WorkspaceService
 from app.storage.workspace_storage import WorkspaceStorage
 from app.workers.process_runner import (
     ProcessWorkerCancelledError,
+    ProcessWorkerTimeoutError,
     run_in_process,
 )
 
@@ -261,6 +263,10 @@ class AnalysisJobService:
         job.cancel_requested_at = now
         job.updated_at = now
         job.finished_at = now
+        job.error_code = "ANALYSIS_CANCELLED"
+        job.error_details_json = {}
+        if job.execution_duration_ms is None:
+            job.execution_duration_ms = 0
         user = AuditService(self.db).ensure_user(principal)
         AuditService(self.db).record_event(
             "analysis_job_cancelled",
@@ -385,6 +391,9 @@ class AnalysisJobService:
             recipe_version=job.recipe_version,
             compiler_version=job.compiler_version,
             result_hash=job.result_hash,
+            error_code=job.error_code,
+            error_details=job.error_details_json,
+            execution_duration_ms=job.execution_duration_ms,
             cancel_requested_at=job.cancel_requested_at,
             created_at=job.created_at,
             updated_at=job.updated_at,
@@ -446,6 +455,7 @@ def run_analysis_job(job_id: UUID) -> None:
             job.progress = max(job.progress, 5)
             job.updated_at = datetime.utcnow()
             db.commit()
+        started_at = time.monotonic()
         try:
             source = db.get(AnalysisFile, job.file_id)
             if source is None:
@@ -495,6 +505,11 @@ def run_analysis_job(job_id: UUID) -> None:
                 }
             db.refresh(job)
             if job.status == AnalysisJobStatus.CANCELLED.value:
+                job.execution_duration_ms = max(
+                    0,
+                    round((time.monotonic() - started_at) * 1000),
+                )
+                db.commit()
                 return
             job.result_json = result
             job.dataset_hashes_json = result.get("lineage", {}).get(
@@ -511,6 +526,8 @@ def run_analysis_job(job_id: UUID) -> None:
             job.status = AnalysisJobStatus.COMPLETED.value
             job.progress = 100
             job.error_message = None
+            job.error_code = None
+            job.error_details_json = None
             if plan.recipe_id is not None:
                 audit = AuditService(db)
                 metadata = {
@@ -545,12 +562,15 @@ def run_analysis_job(job_id: UUID) -> None:
             db.refresh(job)
             job.status = AnalysisJobStatus.CANCELLED.value
             job.error_message = None
+            job.error_code = "ANALYSIS_CANCELLED"
+            job.error_details_json = {}
         except Exception as exc:
             db.refresh(job)
             if job.status != AnalysisJobStatus.CANCELLED.value:
                 job.status = AnalysisJobStatus.FAILED.value
                 job.progress = 100
                 job.error_message = exc.message if isinstance(exc, APIError) else str(exc)
+                job.error_code, job.error_details_json = _structured_analysis_error(exc)
                 if job.recipe_id is not None:
                     AuditService(db).record_event(
                         "analysis_recipe_failed",
@@ -559,9 +579,7 @@ def run_analysis_job(job_id: UUID) -> None:
                             "recipe_id": job.recipe_id,
                             "recipe_version": job.recipe_version,
                             "error_code": (
-                                str(exc.error_code)
-                                if isinstance(exc, APIError)
-                                else type(exc).__name__
+                                job.error_code
                             ),
                         },
                         user_id=job.created_by,
@@ -569,9 +587,21 @@ def run_analysis_job(job_id: UUID) -> None:
                         target_id=job.id,
                         risk_level="medium",
                     )
+        job.execution_duration_ms = max(
+            0,
+            round((time.monotonic() - started_at) * 1000),
+        )
         job.updated_at = datetime.utcnow()
         job.finished_at = datetime.utcnow()
         db.commit()
+
+
+def _structured_analysis_error(exc: Exception) -> tuple[str, dict]:
+    if isinstance(exc, APIError):
+        return exc.error_code.value, dict(exc.details)
+    if isinstance(exc, ProcessWorkerTimeoutError):
+        return "ANALYSIS_TIMEOUT", {"exception_type": type(exc).__name__}
+    return type(exc).__name__, {"exception_type": type(exc).__name__}
 
 
 def _analysis_job_cancelled(job_id: UUID) -> bool:

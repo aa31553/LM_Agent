@@ -289,6 +289,9 @@ class AnalysisJobResponse(BaseModel):
     recipe_version: str | None = None
     compiler_version: str | None = None
     result_hash: str | None = None
+    error_code: str | None = None
+    error_details: dict[str, Any] | None = None
+    execution_duration_ms: int | None = None
     cancel_requested_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

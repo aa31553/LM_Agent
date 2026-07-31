@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     analysis_export_max_rows: int = Field(default=100_000, ge=1)
     analysis_plan_schema_max_chars: int = Field(default=16_000, ge=1000)
     analysis_hybrid_context_max_chars: int = Field(default=24_000, ge=2000)
+    analysis_intent_flow_enabled: bool = False
+    analysis_recipes_enabled: bool = True
 
 
 @lru_cache

@@ -61,6 +61,9 @@ class AnalysisJob(Base):
     result_schema_json: Mapped[dict | None] = mapped_column(JSON)
     result_hash: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(64), index=True)
+    error_details_json: Mapped[dict | None] = mapped_column(JSON)
+    execution_duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     retry_of_job_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("analysis_jobs.id", ondelete="SET NULL"),
         nullable=True,

@@ -243,6 +243,190 @@ class AnalysisRecipeRegistry:
                     },
                     result_schema=["key", "left_count", "right_count", "match_status"],
                 ),
+                RecipeDefinition(
+                    recipe_id="descriptive_statistics",
+                    version="1.0",
+                    category="statistics",
+                    description=(
+                        "Calculate deterministic descriptive statistics with an explicit "
+                        "sample or population standard deviation."
+                    ),
+                    parameters={
+                        "source_field": _column(),
+                        "std_mode": RecipeParameter(
+                            type="enum",
+                            default="sample",
+                            choices=["sample", "population"],
+                        ),
+                    },
+                    result_schema=[
+                        "count",
+                        "null_count",
+                        "mean",
+                        "median",
+                        "std",
+                        "std_definition",
+                        "min",
+                        "q1",
+                        "q3",
+                        "max",
+                    ],
+                ),
+                RecipeDefinition(
+                    recipe_id="boxplot_summary",
+                    version="1.0",
+                    category="statistics",
+                    description=(
+                        "Build a five-number summary using 1.5 IQR whiskers and list "
+                        "bounded outlier values."
+                    ),
+                    parameters={
+                        "source_field": _column(),
+                        "group_field": _column(required=False),
+                    },
+                    result_schema=[
+                        "group",
+                        "min",
+                        "q1",
+                        "median",
+                        "q3",
+                        "max",
+                        "whisker_low",
+                        "whisker_high",
+                        "outlier_count",
+                        "outliers",
+                    ],
+                    chart_semantic_type="boxplot",
+                ),
+                RecipeDefinition(
+                    recipe_id="outlier_iqr",
+                    version="1.0",
+                    category="statistics",
+                    description="Count IQR outliers and return the deterministic bounds.",
+                    parameters={"source_field": _column()},
+                    result_schema=[
+                        "lower_bound",
+                        "upper_bound",
+                        "outlier_count",
+                        "outlier_ratio",
+                    ],
+                ),
+                RecipeDefinition(
+                    recipe_id="correlation_matrix",
+                    version="1.0",
+                    category="statistics",
+                    description=(
+                        "Calculate a bounded Pearson or Spearman correlation matrix; "
+                        "correlation is not causation."
+                    ),
+                    parameters={
+                        "fields": _columns(),
+                        "method": RecipeParameter(
+                            type="enum",
+                            default="pearson",
+                            choices=["pearson", "spearman"],
+                        ),
+                    },
+                    result_schema=[
+                        "x_category",
+                        "y_category",
+                        "value",
+                        "sample_size",
+                        "method",
+                    ],
+                    chart_semantic_type="heatmap",
+                ),
+                RecipeDefinition(
+                    recipe_id="yield_summary",
+                    version="1.0",
+                    category="quality",
+                    description="Calculate OK/NG counts and yield from an explicit status map.",
+                    parameters={
+                        "status_field": _column(),
+                        "ok_values": RecipeParameter(type="strings", required=True),
+                    },
+                    result_schema=["status", "count", "ratio"],
+                    chart_semantic_type="category_bar",
+                ),
+                RecipeDefinition(
+                    recipe_id="spec_judgement",
+                    version="1.0",
+                    category="quality",
+                    description=(
+                        "Judge values against explicit lower and/or upper specification "
+                        "limits with a fixed inclusive boundary rule."
+                    ),
+                    parameters={
+                        "source_field": _column(),
+                        "lsl": RecipeParameter(type="number"),
+                        "usl": RecipeParameter(type="number"),
+                        "inclusive": RecipeParameter(type="boolean", default=True),
+                    },
+                    result_schema=["status", "count", "ratio"],
+                    chart_semantic_type="category_bar",
+                ),
+                RecipeDefinition(
+                    recipe_id="process_capability",
+                    version="1.0",
+                    category="quality",
+                    description=(
+                        "Calculate Cp/Cpk from moving-range within sigma and Pp/Ppk from "
+                        "overall sample sigma."
+                    ),
+                    parameters={
+                        "source_field": _column(),
+                        "lsl": RecipeParameter(type="number", required=True),
+                        "usl": RecipeParameter(type="number", required=True),
+                        "minimum_sample_size": RecipeParameter(
+                            type="integer",
+                            default=30,
+                            minimum=2,
+                            maximum=10000,
+                        ),
+                    },
+                    result_schema=[
+                        "sample_size",
+                        "mean",
+                        "within_std",
+                        "overall_std",
+                        "lsl",
+                        "usl",
+                        "cp",
+                        "cpk",
+                        "pp",
+                        "ppk",
+                    ],
+                    chart_semantic_type="spec_capability",
+                ),
+                RecipeDefinition(
+                    recipe_id="control_chart",
+                    version="1.0",
+                    category="quality",
+                    description=(
+                        "Build a deterministic I-MR, Xbar-R, or P control chart from "
+                        "explicit inputs."
+                    ),
+                    parameters={
+                        "chart_type": RecipeParameter(
+                            type="enum",
+                            required=True,
+                            choices=["i_mr", "xbar_r", "p"],
+                        ),
+                        "source_field": _column(required=False),
+                        "status_field": _column(required=False),
+                        "subgroup_field": _column(required=False),
+                        "order_field": _column(required=False),
+                        "ok_values": RecipeParameter(type="strings"),
+                    },
+                    result_schema=[
+                        "period",
+                        "value",
+                        "center_line",
+                        "ucl",
+                        "lcl",
+                    ],
+                    chart_semantic_type="control_chart",
+                ),
             ]
         }
 
@@ -350,7 +534,7 @@ class AnalysisRecipeRegistry:
                     value = lowered == "true"
                 if not isinstance(value, bool):
                     raise ValueError
-            elif parameter.type == "columns":
+            elif parameter.type in {"columns", "strings"}:
                 if isinstance(value, str):
                     value = [value]
                 if not isinstance(value, list) or not all(
@@ -415,4 +599,48 @@ class AnalysisRecipeRegistry:
                     ErrorCode.RECIPE_PARAMETER_INVALID,
                     "Histogram start must be less than end.",
                     422,
+                )
+        if recipe_id == "correlation_matrix":
+            fields = inputs.get("fields", [])
+            if len(fields) < 2 or len(fields) > 20:
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "Correlation requires between 2 and 20 numeric fields.",
+                    422,
+                )
+            if len(fields) != len(set(fields)):
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "Correlation fields must be unique.",
+                    422,
+                )
+        if recipe_id in {"spec_judgement", "process_capability"}:
+            lsl = inputs.get("lsl")
+            usl = inputs.get("usl")
+            if recipe_id == "spec_judgement" and lsl is None and usl is None:
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "At least one specification limit is required.",
+                    422,
+                )
+            if lsl is not None and usl is not None and lsl >= usl:
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "LSL must be less than USL.",
+                    422,
+                )
+        if recipe_id == "control_chart":
+            chart_type = inputs.get("chart_type")
+            required = {
+                "i_mr": {"source_field"},
+                "xbar_r": {"source_field", "subgroup_field"},
+                "p": {"status_field", "subgroup_field", "ok_values"},
+            }.get(chart_type, set())
+            missing = sorted(required - set(inputs))
+            if missing:
+                raise APIError(
+                    ErrorCode.RECIPE_PARAMETER_INVALID,
+                    "Control chart is missing parameters required by its chart type.",
+                    422,
+                    details={"chart_type": chart_type, "missing_parameters": missing},
                 )

@@ -135,6 +135,10 @@ creates and returns the queued Job, so the frontend must not create a second Job
 | GET | `/api/v1/analysis/files/{file_id}/inspect` | Return workbook schema and samples |
 | POST | `/api/v1/analysis/files/{file_id}/profile/retry` | Queue preprocessing again |
 | DELETE | `/api/v1/analysis/files/{file_id}` | Delete file and jobs |
+| GET | `/api/v1/analysis/recipes` | List enabled versioned Recipe contracts |
+| GET | `/api/v1/analysis/recipes/{recipe_id}` | Read one Recipe contract |
+| POST | `/api/v1/analysis/intents/validate` | Validate and compile a structured IntentDraft |
+| GET | `/api/v1/analysis/metrics/recipes?workspace_id=...` | Read Workspace-scoped Recipe reliability and latency metrics |
 | POST | `/api/v1/analysis/plans/validate` | Validate and normalize a whitelist plan |
 | POST | `/api/v1/analysis/plan-drafts` | Natural language to a constrained, validated draft |
 | GET | `/api/v1/analysis/plan-drafts/{draft_id}` | Read a draft and validation warnings |
@@ -168,10 +172,20 @@ creates and returns the queued Job, so the frontend must not create a second Job
 - Distinct count and percentile
 - Pivot/cross table
 - Pearson or Spearman correlation matrix
+- Versioned quality Recipes: descriptive statistics, boxplot/IQR outliers,
+  correlation heatmap, yield/spec judgement, Cp/Cpk/Pp/Ppk, and I-MR/Xbar-R/P
+  control charts
 
 The backend never executes model-generated Python, SQL, or JavaScript. Unknown columns,
 incompatible numeric operations, unsupported output fields, oversized row counts,
 and excessive group counts are rejected before or during execution.
+
+`ANALYSIS_INTENT_FLOW_ENABLED=false` keeps natural-language drafts on the legacy
+AnalysisPlan path during deployment. Enable it only after the Recipe APIs and Chart
+Schema v3 frontend are deployed and a canary Workspace passes. Setting
+`ANALYSIS_RECIPES_ENABLED=false` rejects new Recipe validation/execution while the
+legacy plan route, Chart v1/v2, existing Jobs, and completed result tables remain
+available.
 
 Every aggregation alias must be unique and must not collide with a `group_by`
 column name. The API rejects these collisions before plan execution. Filter
@@ -335,6 +349,11 @@ After deployment, run:
 ```bash
 python -m app.db.init_db
 ```
+
+The Phase 5–6 additive migration also adds `error_code`, `error_details_json`, and
+`execution_duration_ms` to `analysis_jobs`. See
+[analysis_workspace_deployment.md](analysis_workspace_deployment.md) for rollout,
+metrics, and rollback gates.
 
 The additive phase-two migration creates private Workspaces for existing users,
 links existing Sessions, backfills `workspace_id`, clears legacy spreadsheet

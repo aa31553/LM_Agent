@@ -94,6 +94,9 @@ def _ensure_postgresql_schema() -> None:
             "dataset_hashes_json",
             "result_schema_json",
             "result_hash",
+            "error_code",
+            "error_details_json",
+            "execution_duration_ms",
         }.issubset(analysis_job_columns)
         or not {
             "raw_llm_json",
@@ -150,6 +153,9 @@ def _ensure_sqlite_schema() -> None:
                 "dataset_hashes_json": False,
                 "result_schema_json": True,
                 "result_hash": True,
+                "error_code": True,
+                "error_details_json": True,
+                "execution_duration_ms": True,
             },
         ),
         (
@@ -333,6 +339,9 @@ def _validate_schema() -> None:
             "dataset_hashes_json",
             "result_schema_json",
             "result_hash",
+            "error_code",
+            "error_details_json",
+            "execution_duration_ms",
         },
         "analysis_plan_drafts": {
             "raw_llm_json",

@@ -741,8 +741,10 @@ const instance = LMAnalysisCharts.render(
 ```
 
 前端已隨附 ECharts 6.1.0 runtime，不需外部 CDN。圖表容器應套用
-`analysis-chart` class 以確保有可渲染高度。Adapter 僅接受 bar、line、
-scatter，不執行 API 或 LLM 回傳的 JavaScript。
+`analysis-chart` class 以確保有可渲染高度。Adapter 保留 bar、line、scatter
+相容性，並以固定 semantic renderer 支援 histogram、Pareto、boxplot、
+correlation heatmap、control chart 與 process capability；不執行 API 或 LLM
+回傳的 JavaScript。
 
 ### 5.11 背景 Profiling 與 Parquet
 
@@ -897,13 +899,20 @@ After an XLSX/CSV file reaches `ready`, the frontend can:
 1. Read `/api/v1/analysis/files/{file_id}/inspect` and retain each `column_id`.
 2. Read `/api/v1/analysis/recipes` to build an allow-listed Recipe selector.
 3. Validate a structured intent with `/api/v1/analysis/intents/validate`, or create a
-   natural-language draft with `/api/v1/analysis/intent-drafts`.
+   natural-language draft with `/api/v1/analysis/plan-drafts`.
 4. Display the compiled plan and warnings for explicit confirmation.
 5. Confirm the draft, poll the returned Job, and pass each trusted `charts[]` item to
    `LMAnalysisCharts.toEChartsOption`.
 
 Chart Schema v3 adds `semantic_type`. Histogram and normal summary charts continue to
-carry `x_field`/`y_field`; Pareto uses the fixed `fields.category`, `fields.bar`, and
-`fields.line` mapping. The adapter, not the API or LLM, constructs ECharts series and
-axes. Continue showing `summary.warnings`, `summary.truncated`, and chart `truncated`
-near the visualization.
+carry `x_field`/`y_field`; composite quality charts use fixed `fields` mappings.
+Supported quality semantics are `boxplot`, `heatmap`, `control_chart`, and
+`spec_capability`. The adapter, not the API or LLM, constructs ECharts series and
+axes. Continue showing `summary.warnings`, sample size, statistical definitions,
+`summary.truncated`, and chart `truncated` near the visualization.
+
+The Job response adds `error_code`, `error_details`, and `execution_duration_ms`.
+Operations pages can call
+`GET /api/v1/analysis/metrics/recipes?workspace_id={workspace_id}` to show Recipe
+success rate, initial validation failure rate, repair rate, average duration, and p95
+duration. This endpoint is Workspace permission scoped.

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -10,6 +11,7 @@ class RecipeParameter(BaseModel):
     type: Literal[
         "column",
         "columns",
+        "strings",
         "number",
         "integer",
         "boolean",
@@ -61,3 +63,23 @@ class AnalysisIntentValidationResponse(BaseModel):
     executable_plan: AnalysisPlan
     normalization_actions: list[AnalysisNormalizationAction] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class RecipeMetricItem(BaseModel):
+    recipe_id: str
+    job_count: int
+    completed_count: int
+    failed_count: int
+    cancelled_count: int
+    success_rate: float | None = None
+    draft_count: int
+    validation_failure_rate: float | None = None
+    repair_rate: float | None = None
+    average_duration_ms: float | None = None
+    p95_duration_ms: float | None = None
+
+
+class RecipeMetricsResponse(BaseModel):
+    workspace_id: UUID
+    generated_at: datetime
+    items: list[RecipeMetricItem]

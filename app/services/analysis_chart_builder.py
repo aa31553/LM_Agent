@@ -27,6 +27,8 @@ class AnalysisChartBuilder:
             "column",
             "null_count",
         ),
+        "yield_summary": ("category_bar", "bar", "status", "count"),
+        "spec_judgement": ("category_bar", "bar", "status", "count"),
     }
 
     def build(
@@ -69,6 +71,97 @@ class AnalysisChartBuilder:
                         "secondary_y_label": "cumulative ratio",
                     },
                     "interaction": {"tooltip": True, "zoom": True, "export": True},
+                    "data": limited,
+                    "truncated": len(rows) > len(limited),
+                }
+            ], warnings
+        if recipe_id == "boxplot_summary":
+            required = {"group", "min", "q1", "median", "q3", "max", "outliers"}
+            self._require_fields(limited, required, recipe_id)
+            return [
+                {
+                    "schema_version": "3.0",
+                    "semantic_type": "boxplot",
+                    "chart_type": "boxplot",
+                    "title": title or "Boxplot",
+                    "fields": {
+                        "group": "group",
+                        "min": "min",
+                        "q1": "q1",
+                        "median": "median",
+                        "q3": "q3",
+                        "max": "max",
+                        "outliers": "outliers",
+                    },
+                    "interaction": {"tooltip": True, "zoom": True, "export": True},
+                    "data": limited,
+                    "truncated": len(rows) > len(limited),
+                }
+            ], warnings
+        if recipe_id == "correlation_matrix":
+            required = {"x_category", "y_category", "value", "sample_size"}
+            self._require_fields(limited, required, recipe_id)
+            return [
+                {
+                    "schema_version": "3.0",
+                    "semantic_type": "heatmap",
+                    "chart_type": "heatmap",
+                    "title": title or "Correlation matrix",
+                    "fields": {
+                        "x": "x_category",
+                        "y": "y_category",
+                        "value": "value",
+                        "sample_size": "sample_size",
+                    },
+                    "interaction": {"tooltip": True, "zoom": False, "export": True},
+                    "data": limited,
+                    "truncated": len(rows) > len(limited),
+                }
+            ], warnings
+        if recipe_id == "control_chart":
+            required = {"period", "value", "center_line", "ucl", "lcl"}
+            self._require_fields(limited, required, recipe_id)
+            return [
+                {
+                    "schema_version": "3.0",
+                    "semantic_type": "control_chart",
+                    "chart_type": "line",
+                    "type": "line",
+                    "title": title or "Control chart",
+                    "x_field": "period",
+                    "y_field": "value",
+                    "fields": {
+                        "period": "period",
+                        "value": "value",
+                        "center_line": "center_line",
+                        "ucl": "ucl",
+                        "lcl": "lcl",
+                    },
+                    "x_type": "category",
+                    "interaction": {"tooltip": True, "zoom": True, "export": True},
+                    "data": limited,
+                    "truncated": len(rows) > len(limited),
+                }
+            ], warnings
+        if recipe_id == "process_capability":
+            required = {"cp", "cpk", "pp", "ppk", "lsl", "usl", "mean"}
+            self._require_fields(limited, required, recipe_id)
+            return [
+                {
+                    "schema_version": "3.0",
+                    "semantic_type": "spec_capability",
+                    "chart_type": "bar",
+                    "title": title or "Process capability",
+                    "fields": {
+                        "cp": "cp",
+                        "cpk": "cpk",
+                        "pp": "pp",
+                        "ppk": "ppk",
+                        "lsl": "lsl",
+                        "usl": "usl",
+                        "mean": "mean",
+                    },
+                    "interaction": {"tooltip": True, "zoom": False, "export": True},
                     "data": limited,
                     "truncated": len(rows) > len(limited),
                 }

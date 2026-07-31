@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.schemas.analysis import AnalysisPlan, FilterCondition
@@ -33,6 +34,12 @@ class AnalysisRecipeCompiler:
         allowed_file_ids: set[str] | None = None,
         plan_origin: str = "recipe",
     ) -> tuple[IntentDraft, AnalysisPlan, list[dict[str, Any]], list[str]]:
+        if not settings.analysis_recipes_enabled:
+            raise APIError(
+                ErrorCode.RECIPE_NOT_FOUND,
+                "Analysis recipes are disabled by the rollout feature flag.",
+                503,
+            )
         actions: list[dict[str, Any]] = []
         canonical_recipe_id = self.RECIPE_ALIASES.get(intent.recipe_id, intent.recipe_id)
         if canonical_recipe_id != intent.recipe_id:
@@ -241,13 +248,26 @@ class AnalysisRecipeCompiler:
         numeric_parameters = {
             "histogram": ["source_field"],
             "derive_arithmetic": ["left_field", "right_field"],
+            "descriptive_statistics": ["source_field"],
+            "boxplot_summary": ["source_field"],
+            "outlier_iqr": ["source_field"],
+            "correlation_matrix": ["fields"],
+            "spec_judgement": ["source_field"],
+            "process_capability": ["source_field"],
+            "control_chart": (
+                ["source_field"]
+                if inputs.get("chart_type") in {"i_mr", "xbar_r"}
+                else []
+            ),
         }.get(recipe_id, [])
         for name in numeric_parameters:
-            column_type = source_types.get(inputs[name], "unknown")
-            if column_type not in {"integer", "number", "unknown"}:
-                raise APIError(
-                    ErrorCode.COLUMN_TYPE_INCOMPATIBLE,
-                    f"Recipe requires a numeric column: {inputs[name]}",
-                    422,
-                    details={"inferred_type": column_type},
-                )
+            references = inputs[name] if isinstance(inputs[name], list) else [inputs[name]]
+            for reference in references:
+                column_type = source_types.get(reference, "unknown")
+                if column_type not in {"integer", "number", "unknown"}:
+                    raise APIError(
+                        ErrorCode.COLUMN_TYPE_INCOMPATIBLE,
+                        f"Recipe requires a numeric column: {reference}",
+                        422,
+                        details={"inferred_type": column_type},
+                    )

@@ -246,6 +246,18 @@ DELETE /api/v1/chat/sessions/{session_id}
 OpenXML 副本；查詢使用 DuckDB／Polars。支援多 Sheet／多檔 Join、日期彙總、Pivot、
 distinct count、percentile、Pearson／Spearman correlation。
 同一 Workspace 的不同 Session 可重複使用同一個 `file_id`，不需重新上傳。
+
+Phase 5 的品質分析由版本化 Recipe 執行，包含 descriptive statistics、
+boxplot/IQR、correlation heatmap、yield/spec、Cp/Cpk/Pp/Ppk，以及
+I-MR、Xbar-R、P chart。前端先讀 `GET /analysis/recipes`，結構化輸入可送
+`POST /analysis/intents/validate`；維運指標由
+`GET /analysis/metrics/recipes?workspace_id=...` 取得。
+
+正式 rollout 預設保持 `ANALYSIS_INTENT_FLOW_ENABLED=false`，待 v3 前端與 canary
+驗證後再分批開啟。緊急回復可設 `ANALYSIS_RECIPES_ENABLED=false`，舊 Plan、
+舊 route、Chart v1/v2 與既有結果不受影響。完整步驟見
+[Phase 6 部署與回復](analysis_workspace_deployment.md)。
+
 完整請求、回應與 TypeScript 範例請見
 [前端檔案上傳與分析串接指南](Frontend_File_Upload_Guide.md)。
 

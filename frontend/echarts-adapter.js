@@ -18,6 +18,10 @@
     "pareto",
     "data_quality",
     "missing_values",
+    "boxplot",
+    "heatmap",
+    "control_chart",
+    "spec_capability",
   ]);
 
   function assertChart(chart) {
@@ -25,9 +29,14 @@
       throw new TypeError("chart must be an object");
     }
     const chartType = chart.chart_type || chart.type;
-    if (chart.schema_version === "3.0" && chart.semantic_type === "pareto") {
-      if (!chart.fields?.category || !chart.fields?.bar || !chart.fields?.line) {
-        throw new TypeError("Pareto chart fields are required");
+    if (
+      chart.schema_version === "3.0" &&
+      new Set(["pareto", "boxplot", "heatmap", "control_chart", "spec_capability"]).has(
+        chart.semantic_type,
+      )
+    ) {
+      if (!chart.fields || typeof chart.fields !== "object") {
+        throw new TypeError("Semantic chart fields are required");
       }
       if (!Array.isArray(chart.data)) {
         throw new TypeError("chart.data must be an array");
@@ -54,6 +63,18 @@
     assertChart(chart);
     if (chart.schema_version === "3.0" && chart.semantic_type === "pareto") {
       return toParetoOption(chart);
+    }
+    if (chart.schema_version === "3.0" && chart.semantic_type === "boxplot") {
+      return toBoxplotOption(chart);
+    }
+    if (chart.schema_version === "3.0" && chart.semantic_type === "heatmap") {
+      return toHeatmapOption(chart);
+    }
+    if (chart.schema_version === "3.0" && chart.semantic_type === "control_chart") {
+      return toControlChartOption(chart);
+    }
+    if (chart.schema_version === "3.0" && chart.semantic_type === "spec_capability") {
+      return toCapabilityOption(chart);
     }
     const chartType = chart.chart_type || chart.type;
     const xValues = chart.data.map((row) => row?.[chart.x_field]);
@@ -220,6 +241,142 @@
           restore: {},
           saveAsImage: {},
         },
+      },
+    };
+  }
+
+  function toBoxplotOption(chart) {
+    const fields = chart.fields;
+    const groups = chart.data.map((row) => row?.[fields.group]);
+    const outliers = [];
+    chart.data.forEach((row, groupIndex) => {
+      (row?.[fields.outliers] || []).forEach((value) => {
+        outliers.push([groupIndex, value]);
+      });
+    });
+    return {
+      title: { text: chart.title || "Boxplot", left: "center" },
+      tooltip: { trigger: "item" },
+      grid: { left: 56, right: 28, top: 64, bottom: 48, containLabel: true },
+      xAxis: { type: "category", data: groups, boundaryGap: true },
+      yAxis: { type: "value", scale: true },
+      series: [
+        {
+          name: "distribution",
+          type: "boxplot",
+          data: chart.data.map((row) => [
+            row?.[fields.min],
+            row?.[fields.q1],
+            row?.[fields.median],
+            row?.[fields.q3],
+            row?.[fields.max],
+          ]),
+        },
+        { name: "outliers", type: "scatter", data: outliers },
+      ],
+      toolbox: {
+        right: 12,
+        feature: { dataView: { readOnly: true }, restore: {}, saveAsImage: {} },
+      },
+    };
+  }
+
+  function toHeatmapOption(chart) {
+    const fields = chart.fields;
+    const xCategories = [...new Set(chart.data.map((row) => row?.[fields.x]))];
+    const yCategories = [...new Set(chart.data.map((row) => row?.[fields.y]))];
+    const values = chart.data
+      .map((row) => row?.[fields.value])
+      .filter((value) => typeof value === "number");
+    const absoluteMax = Math.max(1, ...values.map((value) => Math.abs(value)));
+    return {
+      title: { text: chart.title || "Heatmap", left: "center" },
+      tooltip: { position: "top" },
+      grid: { left: 72, right: 72, top: 64, bottom: 72, containLabel: true },
+      xAxis: { type: "category", data: xCategories, splitArea: { show: true } },
+      yAxis: { type: "category", data: yCategories, splitArea: { show: true } },
+      visualMap: {
+        min: -absoluteMax,
+        max: absoluteMax,
+        calculable: true,
+        orient: "horizontal",
+        left: "center",
+        bottom: 8,
+      },
+      series: [
+        {
+          name: fields.value,
+          type: "heatmap",
+          data: chart.data.map((row) => [
+            xCategories.indexOf(row?.[fields.x]),
+            yCategories.indexOf(row?.[fields.y]),
+            row?.[fields.value],
+          ]),
+          label: { show: chart.data.length <= 100 },
+        },
+      ],
+      toolbox: { right: 12, feature: { saveAsImage: {} } },
+    };
+  }
+
+  function toControlChartOption(chart) {
+    const fields = chart.fields;
+    const periods = chart.data.map((row) => row?.[fields.period]);
+    const series = [
+      [fields.value, "solid"],
+      [fields.center_line, "dashed"],
+      [fields.ucl, "dashed"],
+      [fields.lcl, "dashed"],
+    ].map(([field, lineType]) => ({
+      name: field,
+      type: "line",
+      showSymbol: chart.data.length <= 200,
+      lineStyle: { type: lineType },
+      data: chart.data.map((row) => row?.[field]),
+    }));
+    return {
+      title: { text: chart.title || "Control chart", left: "center" },
+      tooltip: { trigger: "axis" },
+      legend: { top: 30, data: series.map((item) => item.name) },
+      grid: { left: 56, right: 28, top: 68, bottom: 56, containLabel: true },
+      xAxis: { type: "category", data: periods, axisLabel: { hideOverlap: true } },
+      yAxis: { type: "value", scale: true },
+      series,
+      dataZoom:
+        chart.data.length > 30
+          ? [
+              { type: "inside", xAxisIndex: 0 },
+              { type: "slider", xAxisIndex: 0, bottom: 14 },
+            ]
+          : undefined,
+      toolbox: {
+        right: 12,
+        feature: { dataView: { readOnly: true }, restore: {}, saveAsImage: {} },
+      },
+    };
+  }
+
+  function toCapabilityOption(chart) {
+    const row = chart.data[0] || {};
+    const fields = chart.fields;
+    const names = ["cp", "cpk", "pp", "ppk"];
+    return {
+      title: { text: chart.title || "Process capability", left: "center" },
+      tooltip: { trigger: "axis" },
+      grid: { left: 56, right: 28, top: 64, bottom: 48, containLabel: true },
+      xAxis: { type: "category", data: names.map((name) => name.toUpperCase()) },
+      yAxis: { type: "value", min: 0 },
+      series: [
+        {
+          name: "capability",
+          type: "bar",
+          data: names.map((name) => row?.[fields[name]]),
+          markLine: { data: [{ yAxis: 1, name: "1.0" }] },
+        },
+      ],
+      toolbox: {
+        right: 12,
+        feature: { dataView: { readOnly: true }, restore: {}, saveAsImage: {} },
       },
     };
   }
