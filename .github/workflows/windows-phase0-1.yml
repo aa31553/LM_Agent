@@ -114,7 +114,7 @@ jobs:
             $body = @{
               state = $state
               context = $context
-            description = "Windows analysis upgrade: $($check.result)"
+              description = "Windows analysis upgrade: $($check.result)"
             } | ConvertTo-Json
             Invoke-RestMethod `
               -Method Post `
@@ -123,4 +123,4 @@ jobs:
               -ContentType "application/json" `
               -Body $body
           }
-          if ($failed) { throw "One or more Windows Phase 0-1 checks failed." }
+          if ($failed) { throw "One or more Windows analysis checks failed." }

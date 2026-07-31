@@ -254,10 +254,10 @@ def test_workspace_storage_separates_original_profile_result_and_artifact(
     )
 
     assert size == 4
-    assert f"files/{file_id}/original" in original_path
-    assert f"files/{file_id}/profile/profile.json" in profile_path
-    assert f"jobs/{job_id}/results/result.json" in result_path
-    assert f"artifacts/{artifact_id}/export.csv" in str(artifact_path)
+    assert f"files/{file_id}/original" in Path(original_path).as_posix()
+    assert f"files/{file_id}/profile/profile.json" in Path(profile_path).as_posix()
+    assert f"jobs/{job_id}/results/result.json" in Path(result_path).as_posix()
+    assert f"artifacts/{artifact_id}/export.csv" in artifact_path.as_posix()
     assert storage.load_json(profile_path) == {"sheets": []}
 
 
