@@ -94,6 +94,10 @@ def test_phase5_registry_contains_versioned_quality_recipes() -> None:
     }.issubset(recipe_ids)
 
 
+def test_clean_number_accepts_integer_control_limits() -> None:
+    assert AnalysisRecipeExecutor._clean_number(1) == 1
+
+
 def test_descriptive_boxplot_and_iqr_definitions(tmp_path: Path) -> None:
     rows = [{"value": value} for value in [1, 2, 3, 4, 100]] + [{"value": None}]
     descriptive = _execute(

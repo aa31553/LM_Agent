@@ -1269,7 +1269,7 @@ class AnalysisRecipeExecutor:
     def _clean_number(value: float | None) -> int | float | None:
         if value is None or not math.isfinite(value):
             return None
-        rounded = round(value, 12)
+        rounded = round(float(value), 12)
         return int(rounded) if rounded.is_integer() else rounded
 
     @staticmethod
