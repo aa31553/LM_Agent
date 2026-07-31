@@ -14,6 +14,7 @@ class AnalysisChartBuilder:
         "histogram": ("histogram", "bar", "bin_label", "record_count"),
         "category_summary": ("category_bar", "bar", "category", "value"),
         "trend_summary": ("trend_line", "line", "period", "value"),
+        "period_overlay": ("period_overlay", "line", "day", "value"),
         "data_quality_summary": (
             "data_quality",
             "bar",
@@ -171,7 +172,29 @@ class AnalysisChartBuilder:
             return [], warnings
         semantic_type, chart_type, x_field, y_field = configuration
         self._require_fields(limited, {x_field, y_field}, recipe_id)
-        series_field = "series" if any("series" in row for row in limited) else None
+        configured_series_field = (
+            "series"
+            if recipe_id in {"trend_summary", "period_overlay"}
+            else None
+        )
+        series_field = (
+            configured_series_field
+            if configured_series_field
+            and (
+                recipe_id == "period_overlay"
+                or any(configured_series_field in row for row in limited)
+            )
+            else None
+        )
+        if series_field:
+            self._require_fields(limited, {series_field}, recipe_id)
+        x_type = (
+            "time"
+            if recipe_id == "trend_summary"
+            else "value"
+            if recipe_id == "period_overlay"
+            else "category"
+        )
         return [
             {
                 "schema_version": "3.0",
@@ -183,10 +206,12 @@ class AnalysisChartBuilder:
                 "y_field": y_field,
                 "series_field": series_field,
                 "tooltip_fields": [],
-                "x_type": "time" if recipe_id == "trend_summary" else "category",
+                "x_type": x_type,
                 "axis": {
-                    "x_type": "time" if recipe_id == "trend_summary" else "category",
-                    "x_label": x_field,
+                    "x_type": x_type,
+                    "x_label": (
+                        "day of month" if recipe_id == "period_overlay" else x_field
+                    ),
                     "y_label": y_field,
                 },
                 "format": {"y_unit": None, "decimal_places": 4},

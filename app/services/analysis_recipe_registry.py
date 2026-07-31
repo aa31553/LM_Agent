@@ -97,6 +97,42 @@ class AnalysisRecipeRegistry:
                     chart_semantic_type="trend_line",
                 ),
                 RecipeDefinition(
+                    recipe_id="period_overlay",
+                    version="1.0",
+                    category="summary",
+                    description=(
+                        "Compare calendar months as separate line series on a shared "
+                        "day-of-month axis from 1 through 31."
+                    ),
+                    parameters={
+                        "date_field": _column(
+                            description="Date or datetime field used for month and day."
+                        ),
+                        "value_field": _column(required=False),
+                        "x_component": RecipeParameter(
+                            type="enum",
+                            default="day",
+                            choices=["day"],
+                        ),
+                        "series_component": RecipeParameter(
+                            type="enum",
+                            default="year_month",
+                            choices=["year_month"],
+                        ),
+                        "aggregation": RecipeParameter(
+                            type="enum",
+                            default="count",
+                            choices=["count", "sum", "mean", "median", "min", "max"],
+                        ),
+                        "complete_x_range": RecipeParameter(
+                            type="boolean",
+                            default=True,
+                        ),
+                    },
+                    result_schema=["day", "series", "value"],
+                    chart_semantic_type="period_overlay",
+                ),
+                RecipeDefinition(
                     recipe_id="pareto",
                     version="1.0",
                     category="quality",
@@ -582,7 +618,12 @@ class AnalysisRecipeRegistry:
 
     @staticmethod
     def _validate_cross_parameters(recipe_id: str, inputs: dict[str, Any]) -> None:
-        if recipe_id in {"category_summary", "trend_summary", "group_summary"}:
+        if recipe_id in {
+            "category_summary",
+            "trend_summary",
+            "period_overlay",
+            "group_summary",
+        }:
             aggregation = inputs.get("aggregation")
             has_value_field = inputs.get("value_field") is not None
             if aggregation == "count" and has_value_field:

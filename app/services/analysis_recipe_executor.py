@@ -110,6 +110,7 @@ class AnalysisRecipeExecutor:
             "histogram": self._histogram,
             "category_summary": self._category_summary,
             "trend_summary": self._trend_summary,
+            "period_overlay": self._period_overlay,
             "pareto": self._pareto,
             "data_quality_summary": self._data_quality_summary,
             "group_summary": self._group_summary,
@@ -369,6 +370,57 @@ class AnalysisRecipeExecutor:
                 "day counts; this chart reports record counts, not a numeric "
                 "measurement. Choose mean, sum, min, max, or median to analyze values."
             )
+        return bounded, warnings, summary
+
+    def _period_overlay(self, plan, frame):
+        inputs = plan.recipe_inputs
+        date_column = self._resolve(inputs["date_field"], set(frame.columns))
+        value_column = self._optional_column(inputs.get("value_field"), frame)
+        buckets: dict[tuple[str, int], list[Any]] = defaultdict(list)
+        series_names: set[str] = set()
+        selected = [date_column]
+        if value_column and value_column != date_column:
+            selected.append(value_column)
+        for row in frame.select(selected).iter_rows(named=True):
+            parsed = self._parse_datetime(row.get(date_column))
+            if parsed is None:
+                continue
+            series = f"{parsed.year:04d}-{parsed.month:02d}"
+            series_names.add(series)
+            buckets[(series, parsed.day)].append(
+                row.get(value_column) if value_column else 1
+            )
+
+        rows = []
+        complete_x_range = inputs.get("complete_x_range", True)
+        for series in sorted(series_names):
+            observed_days = sorted(
+                day for candidate_series, day in buckets if candidate_series == series
+            )
+            days = range(1, 32) if complete_x_range else observed_days
+            for day in days:
+                values = buckets.get((series, day))
+                rows.append(
+                    {
+                        "day": day,
+                        "series": series,
+                        "value": (
+                            self._aggregate_values(values, inputs["aggregation"])
+                            if values
+                            else None
+                        ),
+                    }
+                )
+
+        missing_point_count = sum(1 for row in rows if row["value"] is None)
+        bounded, warnings, summary = self._bounded(rows)
+        summary.update(
+            {
+                "series_count": len(series_names),
+                "x_range": [1, 31] if complete_x_range else None,
+                "missing_point_count": missing_point_count,
+            }
+        )
         return bounded, warnings, summary
 
     def _pareto(self, plan, frame):

@@ -32,7 +32,12 @@ class AnalysisIntentSemanticService:
         "min": ("min", "minimum", "最小", "最低"),
         "max": ("max", "maximum", "最大", "最高"),
     }
-    SUMMARY_RECIPES = {"category_summary", "trend_summary", "group_summary"}
+    SUMMARY_RECIPES = {
+        "category_summary",
+        "trend_summary",
+        "period_overlay",
+        "group_summary",
+    }
     VALUE_AGGREGATIONS = ("mean", "sum", "max", "min", "median")
     OPTION_LABELS = {
         "count": ("資料筆數", "計算每個期間內的資料列數，不讀取量測值。"),

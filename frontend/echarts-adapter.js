@@ -14,6 +14,7 @@
     "histogram",
     "category_bar",
     "trend_line",
+    "period_overlay",
     "stacked_bar",
     "pareto",
     "data_quality",

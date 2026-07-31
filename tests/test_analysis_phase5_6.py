@@ -285,6 +285,7 @@ def test_phase6_feature_flags_switch_prompt_and_recipe_execution(
         schema_context="{}",
     )
     assert "IntentDraft" in system_prompt + user_prompt
+    assert "period_overlay" in system_prompt + user_prompt
 
     monkeypatch.setattr(settings, "analysis_recipes_enabled", False)
     file_id, source, manifest = _manifest(tmp_path, [{"value": 1}])

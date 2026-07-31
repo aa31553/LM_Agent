@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
@@ -83,9 +84,12 @@ def test_registry_is_versioned_and_rejects_undeclared_parameters() -> None:
         "bin_label",
         "record_count",
     ]
-    assert {"histogram", "pareto", "join_compare"}.issubset(
+    assert {"histogram", "period_overlay", "pareto", "join_compare"}.issubset(
         {item.recipe_id for item in registry.list_enabled()}
     )
+    period_overlay = registry.get("period_overlay", "1.0")
+    assert period_overlay.result_schema == ["day", "series", "value"]
+    assert period_overlay.chart_semantic_type == "period_overlay"
     with pytest.raises(APIError) as exc_info:
         registry.normalize_inputs(
             registry.get("histogram"),
@@ -167,6 +171,100 @@ def test_phase3_summary_and_pareto_recipes(tmp_path: Path) -> None:
     )
     assert pareto["table"]["rows"][-1]["cumulative_ratio"] == 1
     assert pareto["charts"][0]["chart_type"] == "composite"
+
+
+def test_period_overlay_builds_month_series_on_complete_day_axis(
+    tmp_path: Path,
+) -> None:
+    result, _ = _execute(
+        tmp_path,
+        "period_overlay",
+        {
+            "date_field": "recorded_at",
+            "value_field": "temperature",
+            "aggregation": "mean",
+        },
+        [
+            {"recorded_at": date(2026, 1, 1), "temperature": 64.0},
+            {"recorded_at": date(2026, 1, 1), "temperature": 66.0},
+            {"recorded_at": date(2026, 1, 2), "temperature": 65.5},
+            {"recorded_at": date(2026, 2, 1), "temperature": 69.0},
+            {"recorded_at": date(2026, 3, 31), "temperature": 70.0},
+        ],
+    )
+
+    rows = result["table"]["rows"]
+    assert result["plan"]["result_contract"] == ["day", "series", "value"]
+    assert len(rows) == 93
+    assert rows[0] == {"day": 1, "series": "2026-01", "value": 65.0}
+    assert rows[31] == {"day": 1, "series": "2026-02", "value": 69.0}
+    assert rows[61] == {"day": 31, "series": "2026-02", "value": None}
+    assert rows[-1] == {"day": 31, "series": "2026-03", "value": 70.0}
+    assert result["summary"]["series_count"] == 3
+    assert result["summary"]["x_range"] == [1, 31]
+    assert result["summary"]["missing_point_count"] == 89
+
+    chart = result["charts"][0]
+    assert chart["schema_version"] == "3.0"
+    assert chart["semantic_type"] == "period_overlay"
+    assert chart["x_field"] == "day"
+    assert chart["y_field"] == "value"
+    assert chart["series_field"] == "series"
+    assert chart["x_type"] == "value"
+    assert chart["axis"]["x_type"] == "value"
+
+
+def test_period_overlay_can_return_only_observed_days(tmp_path: Path) -> None:
+    result, _ = _execute(
+        tmp_path,
+        "period_overlay",
+        {
+            "date_field": "recorded_at",
+            "aggregation": "count",
+            "complete_x_range": False,
+        },
+        [
+            {"recorded_at": date(2026, 1, 1)},
+            {"recorded_at": date(2026, 1, 1)},
+            {"recorded_at": date(2026, 2, 2)},
+        ],
+    )
+    assert result["table"]["rows"] == [
+        {"day": 1, "series": "2026-01", "value": 2},
+        {"day": 2, "series": "2026-02", "value": 1},
+    ]
+    assert result["summary"]["x_range"] is None
+
+
+def test_trend_summary_declares_optional_series_in_result_contract(
+    tmp_path: Path,
+) -> None:
+    result, _ = _execute(
+        tmp_path,
+        "trend_summary",
+        {
+            "date_field": "recorded_at",
+            "value_field": "temperature",
+            "series_field": "line",
+            "period": "day",
+            "aggregation": "mean",
+        },
+        [
+            {
+                "recorded_at": date(2026, 1, 1),
+                "temperature": 64.0,
+                "line": "L1",
+            },
+            {
+                "recorded_at": date(2026, 1, 1),
+                "temperature": 69.0,
+                "line": "L2",
+            },
+        ],
+    )
+    assert result["plan"]["result_contract"] == ["period", "value", "series"]
+    assert result["charts"][0]["series_field"] == "series"
+    assert {row["series"] for row in result["table"]["rows"]} == {"L1", "L2"}
 
 
 def test_phase4_column_id_and_transform_recipes(tmp_path: Path) -> None:

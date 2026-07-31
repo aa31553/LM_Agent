@@ -49,6 +49,34 @@ assert.deepEqual(
   ["L1", "L2"],
 );
 
+const periodOverlay = adapter.toEChartsOption({
+  schema_version: "3.0",
+  semantic_type: "period_overlay",
+  chart_type: "line",
+  type: "line",
+  title: "Temperature by month",
+  x_field: "day",
+  y_field: "value",
+  series_field: "series",
+  x_type: "value",
+  data: [
+    { day: 1, series: "2026-01", value: 64 },
+    { day: 2, series: "2026-01", value: 65 },
+    { day: 1, series: "2026-02", value: 69 },
+    { day: 2, series: "2026-02", value: null },
+  ],
+});
+assert.equal(periodOverlay.xAxis.type, "value");
+assert.deepEqual(
+  periodOverlay.series.map((series) => series.name),
+  ["2026-01", "2026-02"],
+);
+assert.deepEqual(periodOverlay.series[1].data, [
+  [1, 69],
+  [2, null],
+]);
+assert.ok(adapter.supportedSemanticTypes.includes("period_overlay"));
+
 assert.throws(
   () => adapter.toEChartsOption({ ...chart, type: "pie" }),
   /Unsupported chart type/,

@@ -108,5 +108,38 @@
       "value_field": null,
       "clarification_required": false
     }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "period_overlay_mean_zh",
+    "question": "X軸設為1到31號，將1到3月平均溫度各畫一條折線",
+    "expected": {
+      "recipe_id": "period_overlay",
+      "aggregation": "mean",
+      "value_field": "data.溫度",
+      "clarification_required": false
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "period_overlay_ambiguous_zh",
+    "question": "對1、2月份的溫度畫折線圖，每個月一條線，X軸只要日期",
+    "expected": {
+      "recipe_id": "period_overlay",
+      "aggregation": "mean",
+      "value_field": "data.溫度",
+      "clarification_required": true
+    }
+  },
+  {
+    "dataset_version": "manufacturing-v1",
+    "case_id": "period_overlay_mean_en",
+    "question": "Compare average temperature by month with day 1 to 31 on the X axis",
+    "expected": {
+      "recipe_id": "period_overlay",
+      "aggregation": "mean",
+      "value_field": "data.Temperature",
+      "clarification_required": false
+    }
   }
 ]

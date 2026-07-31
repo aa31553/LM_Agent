@@ -22,6 +22,8 @@ class AnalysisRecipeCompiler:
         "类别汇总": "category_summary",
         "類別彙總": "category_summary",
         "趨勢": "trend_summary",
+        "月份疊圖": "period_overlay",
+        "月份對比": "period_overlay",
         "帕累托": "pareto",
     }
 
@@ -91,6 +93,12 @@ class AnalysisRecipeCompiler:
                 "filters": [item.model_dump(mode="json") for item in filters],
             }
         )
+        result_contract = list(definition.result_schema)
+        if (
+            canonical_recipe_id == "trend_summary"
+            and normalized_inputs.get("series_field") is not None
+        ):
+            result_contract.append("series")
         plan = AnalysisPlan(
             sources=intent.sources,
             filters=filters,
@@ -99,7 +107,7 @@ class AnalysisRecipeCompiler:
             recipe_version=definition.version,
             recipe_inputs=normalized_inputs,
             compiler_version=self.COMPILER_VERSION,
-            result_contract=definition.result_schema,
+            result_contract=result_contract,
             chart_enabled=intent.chart_enabled,
             recipe_title=intent.title,
         )
@@ -373,7 +381,13 @@ class AnalysisRecipeCompiler:
             ),
         }.get(recipe_id, [])
         if (
-            recipe_id in {"category_summary", "trend_summary", "group_summary"}
+            recipe_id
+            in {
+                "category_summary",
+                "trend_summary",
+                "period_overlay",
+                "group_summary",
+            }
             and inputs.get("aggregation") != "count"
             and inputs.get("value_field") is not None
         ):

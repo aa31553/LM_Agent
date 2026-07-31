@@ -6,12 +6,17 @@ The Recipe intent flow uses three layers of protection:
 2. Semantic validation compares explicit aggregation words in the question with the compiled plan.
 3. Ambiguous numeric aggregation returns a structured clarification instead of silently guessing.
 
-For `category_summary`, `trend_summary`, and `group_summary`:
+For `category_summary`, `trend_summary`, `period_overlay`, and `group_summary`:
 
 - `count` must not include `value_field`.
 - `mean`, `sum`, `median`, `min`, and `max` require a numeric `value_field`.
 - A draft with `clarification.code = "AGGREGATION_REQUIRED"` must be confirmed with
   `clarification_choice`, or with an explicitly edited plan.
+
+Use `period_overlay` when each calendar month must be a separate line on a shared
+day-of-month X axis. Its deterministic result contract is `day`, `series`, and
+`value`; `complete_x_range=true` emits days 1 through 31 for every month and uses
+`null` for missing or invalid calendar days instead of inventing zero values.
 
 Example:
 
