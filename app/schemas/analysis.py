@@ -134,6 +134,14 @@ class SortSpec(BaseModel):
     direction: Literal["asc", "desc"] = "asc"
 
 
+class ChartFieldSemantic(BaseModel):
+    semantic_type: str = Field(min_length=1, max_length=64)
+    data_type: Literal["quantitative", "nominal", "ordinal", "temporal"]
+    unit: str | None = Field(default=None, max_length=32)
+    sort_order: list[str] | None = Field(default=None, max_length=100)
+    intrinsic_domain: tuple[float, float] | None = None
+
+
 class ChartSpec(BaseModel):
     type: Literal["bar", "line", "scatter"]
     x_field: str
@@ -145,6 +153,7 @@ class ChartSpec(BaseModel):
     decimal_places: int = Field(default=2, ge=0, le=10)
     tooltip_fields: list[str] = Field(default_factory=list, max_length=20)
     zoom: bool = False
+    field_semantics: dict[str, ChartFieldSemantic] = Field(default_factory=dict)
 
 
 class DatasetSource(BaseModel):

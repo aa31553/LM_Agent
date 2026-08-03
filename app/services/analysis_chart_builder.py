@@ -65,6 +65,15 @@ class AnalysisChartBuilder:
                         "bar": "count",
                         "line": "cumulative_ratio",
                     },
+                    "field_semantics": {
+                        "category": {"semantic_type": "Category", "data_type": "nominal"},
+                        "count": {"semantic_type": "Quantity", "data_type": "quantitative"},
+                        "cumulative_ratio": {
+                            "semantic_type": "Percentage",
+                            "data_type": "quantitative",
+                            "intrinsic_domain": [0, 1],
+                        },
+                    },
                     "axis": {
                         "x_type": "category",
                         "x_label": "category",
@@ -94,6 +103,10 @@ class AnalysisChartBuilder:
                         "max": "max",
                         "outliers": "outliers",
                     },
+                    "field_semantics": {
+                        "group": {"semantic_type": "Category", "data_type": "nominal"},
+                        "median": {"semantic_type": "Quantity", "data_type": "quantitative"},
+                    },
                     "interaction": {"tooltip": True, "zoom": True, "export": True},
                     "data": limited,
                     "truncated": len(rows) > len(limited),
@@ -113,6 +126,15 @@ class AnalysisChartBuilder:
                         "y": "y_category",
                         "value": "value",
                         "sample_size": "sample_size",
+                    },
+                    "field_semantics": {
+                        "x_category": {"semantic_type": "Category", "data_type": "nominal"},
+                        "y_category": {"semantic_type": "Category", "data_type": "nominal"},
+                        "value": {
+                            "semantic_type": "Correlation",
+                            "data_type": "quantitative",
+                            "intrinsic_domain": [-1, 1],
+                        },
                     },
                     "interaction": {"tooltip": True, "zoom": False, "export": True},
                     "data": limited,
@@ -138,6 +160,10 @@ class AnalysisChartBuilder:
                         "ucl": "ucl",
                         "lcl": "lcl",
                     },
+                    "field_semantics": {
+                        "period": {"semantic_type": "Sequence", "data_type": "ordinal"},
+                        "value": {"semantic_type": "Quantity", "data_type": "quantitative"},
+                    },
                     "x_type": "category",
                     "interaction": {"tooltip": True, "zoom": True, "export": True},
                     "data": limited,
@@ -161,6 +187,12 @@ class AnalysisChartBuilder:
                         "lsl": "lsl",
                         "usl": "usl",
                         "mean": "mean",
+                    },
+                    "field_semantics": {
+                        "cp": {"semantic_type": "Quantity", "data_type": "quantitative"},
+                        "cpk": {"semantic_type": "Quantity", "data_type": "quantitative"},
+                        "pp": {"semantic_type": "Quantity", "data_type": "quantitative"},
+                        "ppk": {"semantic_type": "Quantity", "data_type": "quantitative"},
                     },
                     "interaction": {"tooltip": True, "zoom": False, "export": True},
                     "data": limited,
@@ -206,6 +238,22 @@ class AnalysisChartBuilder:
                 "y_field": y_field,
                 "series_field": series_field,
                 "tooltip_fields": [],
+                "field_semantics": {
+                    x_field: {
+                        "semantic_type": (
+                            "Date" if x_type == "time" else "Quantity" if x_type == "value" else "Category"
+                        ),
+                        "data_type": (
+                            "temporal" if x_type == "time" else "quantitative" if x_type == "value" else "nominal"
+                        ),
+                    },
+                    y_field: {"semantic_type": "Quantity", "data_type": "quantitative"},
+                    **(
+                        {series_field: {"semantic_type": "Category", "data_type": "nominal"}}
+                        if series_field
+                        else {}
+                    ),
+                },
                 "x_type": x_type,
                 "axis": {
                     "x_type": x_type,

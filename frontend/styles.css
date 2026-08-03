@@ -260,6 +260,19 @@ label {
   min-height: 420px;
 }
 
+.analysis-chart-panel h3 {
+  margin: 0 0 8px;
+}
+
+.chart-warning {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d69e2e;
+  border-radius: 6px;
+  color: #744210;
+  background: #fffff0;
+}
+
 .metric-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

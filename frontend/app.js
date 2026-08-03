@@ -1,6 +1,7 @@
 const API_PREFIX = localStorage.getItem("lmAgentApiBase") || "http://127.0.0.1:8000/api/v1";
 const tabs = {
   overview: "狀態",
+  analysis: "資料分析",
   knowledge: "知識庫",
   documents: "文件",
   skills: "Skills",
@@ -26,6 +27,7 @@ const state = {
   llmwikiPage: null,
   chatController: null,
   codeChatController: null,
+  analysisCharts: [],
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -57,6 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function renderAll() {
   renderOverview();
+  renderAnalysis();
   renderKnowledge();
   renderLLMWiki();
   renderDocuments();
@@ -71,6 +74,108 @@ function activateTab(tab) {
   $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
   $$(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === tab));
   $("#activeTitle").textContent = tabs[tab] || tab;
+  if (tab === "analysis") {
+    state.analysisCharts.forEach(({ instance }) => instance.resize());
+  }
+}
+
+function renderAnalysis() {
+  $("#analysis").innerHTML = `
+    <div class="grid">
+      <div class="panel">
+        <div class="panel-header">
+          <div><h2>Analysis Job 圖表</h2><p class="muted">輸入已完成的 Job ID，以 Flint 編譯並由 ECharts 顯示。</p></div>
+          <button class="primary" id="loadAnalysisJobBtn">載入</button>
+        </div>
+        <div class="form-grid">
+          <label class="wide">Job ID<input id="analysisJobId" /></label>
+        </div>
+        <div id="analysisStatus" class="output compact-output"></div>
+      </div>
+      <div id="analysisCharts" class="grid"></div>
+    </div>
+  `;
+  $("#loadAnalysisJobBtn").addEventListener("click", loadAnalysisJob);
+}
+
+function disposeAnalysisCharts() {
+  state.analysisCharts.forEach(({ instance, observer }) => {
+    observer?.disconnect();
+    instance?.dispose();
+  });
+  state.analysisCharts = [];
+}
+
+async function loadAnalysisJob() {
+  const jobId = $("#analysisJobId").value.trim();
+  try {
+    if (!jobId) throw new Error("請輸入 Analysis Job ID");
+    const job = await api(`/analysis/jobs/${encodeURIComponent(jobId)}`);
+    writeOutput("#analysisStatus", {
+      job_id: job.job_id,
+      status: job.status,
+      warnings: job.result?.warnings || [],
+      error_message: job.error_message,
+    });
+    renderAnalysisCharts(job.result?.charts || [], job.result?.warnings || []);
+  } catch (error) {
+    disposeAnalysisCharts();
+    $("#analysisCharts").replaceChildren();
+    writeOutput("#analysisStatus", errorPayload(error));
+  }
+}
+
+function renderAnalysisCharts(charts, resultWarnings = []) {
+  disposeAnalysisCharts();
+  const host = $("#analysisCharts");
+  host.replaceChildren();
+  if (!charts.length) {
+    const empty = document.createElement("div");
+    empty.className = "panel";
+    empty.textContent = "此 Job 沒有圖表資料。";
+    host.appendChild(empty);
+    return;
+  }
+  charts.forEach((chart, index) => {
+    const panel = document.createElement("section");
+    panel.className = "panel analysis-chart-panel";
+    const heading = document.createElement("h3");
+    heading.textContent = chart.title || `Chart ${index + 1}`;
+    const warning = document.createElement("div");
+    warning.className = "chart-warning";
+    warning.hidden = true;
+    const container = document.createElement("div");
+    container.className = "analysis-chart";
+    container.setAttribute("role", "img");
+    container.setAttribute("aria-label", heading.textContent);
+    panel.append(heading, warning, container);
+    host.appendChild(panel);
+    try {
+      const instance = globalThis.LMAnalysisCharts.render(container, chart);
+      const compilerWarnings = instance.__lmChartWarnings || [];
+      const warnings = [
+        ...(chart.truncated ? ["圖表資料已由後端截斷。"] : []),
+        ...resultWarnings,
+        ...compilerWarnings.map((item) => item.message || String(item)),
+      ];
+      if (warnings.length) {
+        warning.textContent = [...new Set(warnings)].join(" ");
+        warning.hidden = false;
+      }
+      const observer = typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => instance.resize());
+      observer?.observe(container);
+      state.analysisCharts.push({ instance, observer });
+    } catch (error) {
+      warning.textContent = `圖表無法顯示：${error.message}`;
+      warning.hidden = false;
+      const fallback = document.createElement("pre");
+      fallback.className = "output compact-output";
+      fallback.textContent = JSON.stringify(chart.data || [], null, 2);
+      panel.appendChild(fallback);
+    }
+  });
 }
 
 async function loadStartupData() {

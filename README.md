@@ -21,6 +21,7 @@ deployment artifact, but the default developer workflow is:
 ### Prerequisites
 
 - Python 3.11+
+- Node.js 18+ (builds the Flint-powered analysis chart console)
 - PostgreSQL 16+ recommended
 - `pgvector` extension installed in PostgreSQL
 - Optional: Redis, if you want parity with the future worker/queue setup
@@ -49,7 +50,14 @@ Install dependencies:
 
 ```bash
 pip install -e .[dev]
+npm ci
+npm run build:frontend
 ```
+
+After starting Uvicorn, open `http://127.0.0.1:8000/console/`. The Analysis tab
+compiles versioned analysis chart results with Microsoft Flint and renders them
+through the bundled ECharts runtime. See `docs/flint_chart_integration.md` for
+the architecture, supported chart types, tests, and upgrade procedure.
 
 Create `.env` from `.env.example`, then verify the database URL points to the
 local PostgreSQL instance:
