@@ -18,7 +18,10 @@ from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.db.base import Base
 from app.db.session import create_database_engine
+from app.models.audit import RetrievalLog
+from app.models.chat import ChatMessage, ChatSession
 from app.models.document import Document, DocumentProcessingJob
+from app.models.document_chunk import DocumentChunk
 from app.models.knowledge_base import KnowledgeBase
 from app.schemas.document import DocumentUpdate
 from app.schemas.knowledge_base import KnowledgeBaseCreate, KnowledgeBaseUpdate
@@ -80,6 +83,26 @@ async def test_knowledge_base_and_document_crud_enforces_write_and_admin_permiss
         )
         db.add(document)
         db.flush()
+        chunk = DocumentChunk(
+            document_id=document.id,
+            knowledge_base_id=knowledge_base.id,
+            chunk_index=0,
+            content="quality manual",
+            confidential_level=ConfidentialLevel.INTERNAL.value,
+        )
+        session = ChatSession(user_id=owner_user.id, title="Document retrieval")
+        db.add_all([chunk, session])
+        db.flush()
+        message = ChatMessage(session_id=session.id, user_id=owner_user.id, role="assistant")
+        db.add(message)
+        db.flush()
+        retrieval_log = RetrievalLog(
+            message_id=message.id,
+            query="quality manual",
+            document_id=document.id,
+            chunk_id=chunk.id,
+        )
+        db.add(retrieval_log)
         db.add(DocumentProcessingJob(document_id=document.id, job_type="document", status="queued"))
         db.commit()
 
@@ -114,6 +137,9 @@ async def test_knowledge_base_and_document_crud_enforces_write_and_admin_permiss
         assert response.status_code == 204
         assert db.get(Document, document.id) is None
         assert db.scalar(select(DocumentProcessingJob).where(DocumentProcessingJob.document_id == document.id)) is None
+        db.refresh(retrieval_log)
+        assert retrieval_log.document_id is None
+        assert retrieval_log.chunk_id is None
         assert not document_path.exists()
 
         # Knowledge-base deletion also removes its documents and associated storage.

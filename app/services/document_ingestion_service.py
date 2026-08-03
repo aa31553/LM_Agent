@@ -6,14 +6,14 @@ from uuid import UUID, uuid4
 
 from fastapi import UploadFile
 from PIL import Image
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.constants import ChatType, ConfidentialLevel, DocumentScope, DocumentStatus, ErrorCode
 from app.core.exceptions import APIError
 from app.core.security import Principal
-from app.models.audit import AuditEvent
+from app.models.audit import AuditEvent, RetrievalLog
 from app.models.chat import ChatSession
 from app.models.document import Document, DocumentProcessingJob
 from app.models.document_chunk import DocumentChunk
@@ -397,6 +397,19 @@ class DocumentIngestionService:
         artifact_paths = [
             path for path in (document.file_path, document.markdown_path, *image_paths) if path
         ]
+        chunk_ids = select(DocumentChunk.id).where(DocumentChunk.document_id == document.id)
+        # Retrieval history is retained after source deletion, but its nullable
+        # references must be cleared before the referenced chunks/document.
+        self.db.execute(
+            update(RetrievalLog)
+            .where(
+                or_(
+                    RetrievalLog.document_id == document.id,
+                    RetrievalLog.chunk_id.in_(chunk_ids),
+                )
+            )
+            .values(document_id=None, chunk_id=None)
+        )
         self.db.execute(
             delete(AuditEvent).where(
                 AuditEvent.target_type == "document", AuditEvent.target_id == document.id
