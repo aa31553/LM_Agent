@@ -3,6 +3,10 @@ import time
 from datetime import datetime
 from uuid import UUID
 
+from app.services.dataset_query_service import (
+    DatasetQueryService,
+    execute_dataset_analysis,
+)
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.orm import Session
 
@@ -13,6 +17,7 @@ from app.core.constants import (
     ConfidentialLevel,
     ErrorCode,
     PermissionLevel,
+    ThinkingMode,
 )
 from app.core.exceptions import APIError
 from app.core.security import Principal
@@ -20,11 +25,8 @@ from app.db.session import SessionLocal
 from app.models.analysis import AnalysisFile, AnalysisJob
 from app.models.chat import ChatSession
 from app.schemas.analysis import AnalysisJobCreate, AnalysisJobResponse, AnalysisPlan
+from app.services.agent_tool_service import AgentToolService
 from app.services.audit_service import AuditService
-from app.services.dataset_query_service import (
-    DatasetQueryService,
-    execute_dataset_analysis,
-)
 from app.services.llm_service import LLMService
 from app.services.masking_service import MaskingService
 from app.services.permission_service import PermissionService
@@ -68,6 +70,12 @@ class AnalysisJobService:
                 "Spreadsheet preprocessing is not complete.",
                 409,
                 details={"file_id": str(source.id), "status": source.status},
+            )
+        if not (source.dataset_manifest or {}).get("datasets"):
+            raise APIError(
+                ErrorCode.INVALID_REQUEST,
+                "This workspace file can be read by tools but is not a deterministic dataset.",
+                409,
             )
         if payload.plan.sources:
             if source.id not in {item.file_id for item in payload.plan.sources}:
@@ -400,7 +408,15 @@ class AnalysisJobService:
             finished_at=job.finished_at,
         )
 
-    async def explain(self, job: AnalysisJob) -> str:
+    async def explain(
+        self,
+        job: AnalysisJob,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+        use_tools: bool = False,
+        principal: Principal | None = None,
+    ) -> str:
         if job.status != AnalysisJobStatus.COMPLETED.value or job.result_json is None:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -429,10 +445,36 @@ class AnalysisJobService:
                 400,
             )
         user_prompt = f"result_json:\n{result_dlp.text}"
-        answer = await LLMService().complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
+        llm_service = LLMService(
+            model=model,
+            thinking_mode=thinking_mode,
         )
+        if use_tools:
+            if principal is None:
+                raise APIError(ErrorCode.PERMISSION_DENIED, "Principal is required for tools.", 403)
+            system_prompt += (
+                " 你可以使用 workspace tools 查閱必要的工作區原始內容；"
+                "不得用文件內容改寫後端已計算的數字。"
+            )
+            answer = (
+                await AgentToolService(
+                    db=self.db,
+                    llm_service=llm_service,
+                ).answer_with_tools(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    knowledge_base_ids=[],
+                    workspace_id=job.workspace_id,
+                    top_k=8,
+                    use_rerank=False,
+                    principal=principal,
+                )
+            ).answer
+        else:
+            answer = await llm_service.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
         response_dlp = MaskingService(self.db).scan_and_mask(
             answer,
             location="response",

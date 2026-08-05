@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.constants import DocumentStatus
+from app.core.constants import DocumentStatus, ThinkingMode
 from app.core.security import Principal
 from app.models.knowledge_base import KnowledgeBase
 from app.schemas.llmwiki import (
@@ -18,17 +18,16 @@ from app.schemas.llmwiki import (
     LLMWikiGraphEdge,
     LLMWikiGraphNode,
     LLMWikiIndexItem,
+    LLMWikiLink,
     LLMWikiLintIssue,
     LLMWikiLintResponse,
-    LLMWikiLink,
     LLMWikiOperationLogItem,
     LLMWikiTopicCandidate,
     LLMWikiTopicPage,
 )
+from app.services.llm_service import LLMService
 from app.services.permission_service import PermissionService
 from app.services.vector_store_service import VectorStoreService
-from app.services.llm_service import LLMService
-
 
 _TERM_PATTERN = re.compile(r"[\w\u4e00-\u9fff][\w\u4e00-\u9fff\-]{1,}", re.UNICODE)
 _LATIN_WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{2,}")
@@ -212,9 +211,19 @@ class _TopicReview:
 class LLMWikiService:
     _schema_ready = False
 
-    def __init__(self, db: Session | None = None, llm_service: LLMService | None = None) -> None:
+    def __init__(
+        self,
+        db: Session | None = None,
+        llm_service: LLMService | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
-        self.llm_service = llm_service or LLMService()
+        self.llm_service = llm_service or LLMService(
+            model=model,
+            thinking_mode=thinking_mode,
+        )
         if self.db is not None and not LLMWikiService._schema_ready:
             self._ensure_schema()
             LLMWikiService._schema_ready = True
@@ -1648,6 +1657,15 @@ class LLMWikiService:
             "related_topic_hints": review.related_topic_hints or [],
             "signal_score": signal.score,
         }
+        route = getattr(self.llm_service, "route", None)
+        if reviewer == "llm" and route is not None:
+            metadata.update(
+                {
+                    "llm_route": route.selection,
+                    "llm_model": route.model,
+                    "thinking_mode": route.thinking_mode,
+                }
+            )
         existing = self.db.execute(
             text(
                 """
@@ -1781,6 +1799,15 @@ class LLMWikiService:
                 "reviewer": reviewer,
                 "status": status,
                 "schema_version": _SCHEMA_VERSION,
+                **(
+                    {
+                        "llm_route": route.selection,
+                        "llm_model": route.model,
+                        "thinking_mode": route.thinking_mode,
+                    }
+                    if reviewer == "llm" and route is not None
+                    else {}
+                ),
             },
         )
         if commit:

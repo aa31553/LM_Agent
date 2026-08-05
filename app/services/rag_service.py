@@ -4,39 +4,53 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.core.config import settings
-from app.core.constants import ChatType, ErrorCode, MessageRole, RiskLevel
-from app.core.exceptions import APIError
-from app.core.security import Principal
-from app.models.document import Document
 from app.rag.citation_builder import CitationBuilder
 from app.rag.context_builder import ContextBuilder
 from app.rag.prompt_builder import PromptBuilder
 from app.rag.query_processor import QueryProcessor
 from app.rag.retriever import HybridRetriever
-from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
 from app.security.prompt_injection_detector import PromptInjectionDetector
-from app.services.agent_tool_service import AgentToolService
-from app.services.audit_service import AuditService
 from app.services.chat_history_service import ChatHistoryService, ConversationHistory
 from app.services.chat_response_service import finalize_chat_response
 from app.services.image_context_service import ImageContextService
-from app.services.llm_service import LLMService
 from app.services.llmwiki_service import LLMWikiService
+from app.services.skill_service import SkillService
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.constants import (
+    ChatType,
+    ErrorCode,
+    MessageRole,
+    PermissionLevel,
+    RiskLevel,
+    ThinkingMode,
+)
+from app.core.exceptions import APIError
+from app.core.security import Principal
+from app.models.document import Document
+from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
+from app.services.agent_tool_service import AgentToolService
+from app.services.audit_service import AuditService
+from app.services.llm_service import LLMService
 from app.services.masking_service import MaskingService
 from app.services.prompt_budget_service import PromptBudgetService
-from app.services.skill_service import SkillService
 from app.services.vector_store_service import RetrievedChunk
+from app.services.workspace_service import WorkspaceService
 from app.utils.llm_usage import reset_llm_token_usage
 
 logger = logging.getLogger(__name__)
 
 
 class RAGService:
-    def __init__(self, db: Session | None = None) -> None:
+    def __init__(
+        self,
+        db: Session | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
         self.masking_service = MaskingService(db)
         self.prompt_injection_detector = PromptInjectionDetector()
@@ -44,10 +58,15 @@ class RAGService:
         self.retriever = HybridRetriever(db=db)
         self.context_builder = ContextBuilder()
         self.prompt_builder = PromptBuilder()
-        self.llm_service = LLMService()
+        self.llm_service = LLMService(model=model, thinking_mode=thinking_mode)
         self.agent_tool_service = AgentToolService(db=db, llm_service=self.llm_service)
         self.citation_builder = CitationBuilder()
-        self.audit_service = AuditService(db)
+        self.audit_service = AuditService(
+            db,
+            model_name=self.llm_service.route.model,
+            model_route=self.llm_service.route.selection,
+            thinking_mode=self.llm_service.route.thinking_mode,
+        )
         self.chat_history_service = ChatHistoryService(
             self.masking_service,
             max_turns=settings.chat_history_max_turns,
@@ -82,6 +101,17 @@ class RAGService:
             title_seed=payload.query,
             chat_type=chat_type,
         )
+        effective_workspace_id = session.workspace_id
+        if payload.workspace_id is not None:
+            if self.db is None:
+                raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
+            workspace = WorkspaceService(self.db).resolve_for_session(
+                session,
+                principal,
+                payload.workspace_id,
+                required=PermissionLevel.READ,
+            )
+            effective_workspace_id = workspace.id
         query_dlp = self.masking_service.scan_and_mask(payload.query, location="query")
         processed_query = self.query_processor.normalize(query_dlp.text)
         user_message = self.audit_service.record_message(
@@ -149,7 +179,12 @@ class RAGService:
             )
         )
 
-        if not general_knowledge_mode and not chunks and not llmwiki_context:
+        if (
+            not general_knowledge_mode
+            and not chunks
+            and not llmwiki_context
+            and not (payload.use_tools and effective_workspace_id is not None)
+        ):
             answer = "The available documents do not contain enough information to answer this question."
             self.audit_service.record_message(
                 session=session,
@@ -280,6 +315,7 @@ class RAGService:
                     top_k=payload.top_k,
                     use_rerank=payload.use_rerank,
                     principal=principal,
+                    workspace_id=effective_workspace_id,
                     messages=conversation_messages,
                 )
             except Exception as exc:
@@ -428,6 +464,17 @@ class RAGService:
             title_seed=payload.query,
             chat_type=chat_type,
         )
+        effective_workspace_id = session.workspace_id
+        if payload.workspace_id is not None:
+            if self.db is None:
+                raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
+            workspace = WorkspaceService(self.db).resolve_for_session(
+                session,
+                principal,
+                payload.workspace_id,
+                required=PermissionLevel.READ,
+            )
+            effective_workspace_id = workspace.id
         query_dlp = self.masking_service.scan_and_mask(payload.query, location="query")
         processed_query = self.query_processor.normalize(query_dlp.text)
         user_message = self.audit_service.record_message(
@@ -501,7 +548,12 @@ class RAGService:
                 max_chars=self._llmwiki_context_char_budget(),
             )
         )
-        if not general_knowledge_mode and not chunks and not llmwiki_context:
+        if (
+            not general_knowledge_mode
+            and not chunks
+            and not llmwiki_context
+            and not (payload.use_tools and effective_workspace_id is not None)
+        ):
             answer = "The available documents do not contain enough information to answer this question."
             self.audit_service.record_message(
                 session=session,
@@ -638,6 +690,7 @@ class RAGService:
                     top_k=payload.top_k,
                     use_rerank=payload.use_rerank,
                     principal=principal,
+                    workspace_id=effective_workspace_id,
                     messages=conversation_messages,
                 )
             except Exception as exc:

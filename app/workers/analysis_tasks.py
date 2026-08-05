@@ -43,7 +43,7 @@ def run_worker() -> None:
             source_id = source.id if source is not None else None
         if source_id is not None:
             logger.info(
-                "spreadsheet_profile_claimed",
+                "workspace_file_processing_claimed",
                 extra={"analysis_file_id": str(source_id)},
             )
             run_spreadsheet_profile(source_id)

@@ -11,7 +11,7 @@ from app.core.security import Principal
 from app.db.session import SessionLocal
 from app.models.analysis import AnalysisFile
 from app.services.analysis_job_service import AnalysisJobService
-from app.services.spreadsheet_ingestion_service import profile_spreadsheet_file
+from app.services.workspace_file_ingestion_service import process_workspace_file
 from app.workers.process_runner import run_in_process
 
 
@@ -74,7 +74,7 @@ def run_spreadsheet_profile(file_id: UUID) -> None:
         db.commit()
         try:
             result = run_in_process(
-                profile_spreadsheet_file,
+                process_workspace_file,
                 timeout_seconds=settings.analysis_profile_timeout_seconds,
                 kwargs={
                     "workspace_id": source.workspace_id,

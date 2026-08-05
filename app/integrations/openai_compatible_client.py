@@ -10,8 +10,9 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from app.core.config import settings
-from app.core.constants import ErrorCode
+from app.core.constants import ErrorCode, ThinkingMode
 from app.core.exceptions import APIError
+from app.services.llm_routing_service import LLMRoutingService, ResolvedLLMRoute
 from app.utils.llm_usage import parse_llm_usage, record_llm_usage
 
 
@@ -53,8 +54,16 @@ def build_api_url(base_url: str, api_path: str) -> str:
 
 
 class OpenAICompatibleClient:
-    def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+        route: ResolvedLLMRoute | None = None,
+    ) -> None:
         self.http_client = http_client
+        self.route = route or LLMRoutingService().resolve(model, thinking_mode)
 
     async def chat_completion(
         self,
@@ -102,19 +111,19 @@ class OpenAICompatibleClient:
         messages: list[dict[str, Any]],
     ) -> AsyncIterator[str]:
         payload = {
-            "model": settings.llm_model,
+            "model": self.route.model,
             "messages": messages,
-            "temperature": settings.llm_temperature,
-            "top_p": settings.llm_top_p,
-            "max_tokens": settings.llm_max_tokens,
+            "temperature": self.route.temperature,
+            "top_p": self.route.top_p,
+            "max_tokens": self.route.max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        reasoning_effort = settings.llm_reasoning_effort.strip()
+        reasoning_effort = self.route.reasoning_effort
         if reasoning_effort and reasoning_effort.lower() != "none":
             payload["reasoning_effort"] = reasoning_effort
         headers = self._headers()
-        url = build_api_url(settings.llm_base_url, settings.llm_api_path)
+        url = build_api_url(self.route.base_url, self.route.api_path)
 
         try:
             if self.http_client is not None:
@@ -123,20 +132,20 @@ class OpenAICompatibleClient:
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=settings.llm_timeout_seconds,
+                    timeout=self.route.timeout_seconds,
                 ) as response:
                     response.raise_for_status()
                     async for chunk in self._iter_stream_content(response):
                         yield chunk
             else:
                 async with (
-                    httpx.AsyncClient(verify=settings.llm_ssl_verify) as client,
+                    httpx.AsyncClient(verify=self.route.ssl_verify) as client,
                     client.stream(
                         "POST",
                         url,
                         json=payload,
                         headers=headers,
-                        timeout=settings.llm_timeout_seconds,
+                        timeout=self.route.timeout_seconds,
                     ) as response,
                 ):
                     response.raise_for_status()
@@ -160,8 +169,8 @@ class OpenAICompatibleClient:
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if settings.llm_api_key:
-            headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+        if self.route.api_key:
+            headers["Authorization"] = f"Bearer {self.route.api_key}"
         return headers
 
     async def _post_chat_completion(
@@ -172,13 +181,13 @@ class OpenAICompatibleClient:
         tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": settings.llm_model,
+            "model": self.route.model,
             "messages": messages,
-            "temperature": settings.llm_temperature,
-            "top_p": settings.llm_top_p,
-            "max_tokens": settings.llm_max_tokens,
+            "temperature": self.route.temperature,
+            "top_p": self.route.top_p,
+            "max_tokens": self.route.max_tokens,
         }
-        reasoning_effort = settings.llm_reasoning_effort.strip()
+        reasoning_effort = self.route.reasoning_effort
         if reasoning_effort and reasoning_effort.lower() != "none":
             payload["reasoning_effort"] = reasoning_effort
         if tools:
@@ -187,7 +196,7 @@ class OpenAICompatibleClient:
             payload["tool_choice"] = tool_choice
 
         headers = self._headers()
-        url = build_api_url(settings.llm_base_url, settings.llm_api_path)
+        url = build_api_url(self.route.base_url, self.route.api_path)
 
         try:
             if self.http_client is not None:
@@ -195,15 +204,15 @@ class OpenAICompatibleClient:
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=settings.llm_timeout_seconds,
+                    timeout=self.route.timeout_seconds,
                 )
             else:
-                async with httpx.AsyncClient(verify=settings.llm_ssl_verify) as client:
+                async with httpx.AsyncClient(verify=self.route.ssl_verify) as client:
                     response = await client.post(
                         url,
                         json=payload,
                         headers=headers,
-                        timeout=settings.llm_timeout_seconds,
+                        timeout=self.route.timeout_seconds,
                     )
             response.raise_for_status()
             body = response.json()

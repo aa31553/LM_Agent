@@ -1,16 +1,17 @@
 import json
 
-from sqlalchemy.orm import Session
-
-from app.core.config import settings
-from app.core.constants import AnalysisJobStatus, ErrorCode, PermissionLevel
-from app.core.exceptions import APIError
-from app.core.security import Principal
 from app.rag.citation_builder import CitationBuilder
 from app.rag.context_builder import ContextBuilder
 from app.rag.retriever import HybridRetriever
-from app.schemas.analysis import AnalysisHybridRequest
 from app.services.analysis_artifact_service import AnalysisArtifactService
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.constants import AnalysisJobStatus, ErrorCode, PermissionLevel, ThinkingMode
+from app.core.exceptions import APIError
+from app.core.security import Principal
+from app.schemas.analysis import AnalysisHybridRequest
+from app.services.agent_tool_service import AgentToolService
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.llm_service import LLMService
 from app.services.masking_service import MaskingService
@@ -20,11 +21,17 @@ from app.services.workspace_service import WorkspaceService
 class HybridAnalysisService:
     """Compose computed spreadsheet facts with authorized KB evidence."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
         self.jobs = AnalysisJobService(db)
         self.retriever = HybridRetriever(db=db)
-        self.llm = LLMService()
+        self.llm = LLMService(model=model, thinking_mode=thinking_mode)
         self.masking = MaskingService(db)
 
     async def answer(
@@ -119,10 +126,30 @@ class HybridAnalysisService:
             "使用繁體中文。"
         )
         user_prompt = f"{context_dlp.text}\n\n[QUESTION]\n{question_dlp.text}"
-        answer = await self.llm.complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        if payload.use_tools:
+            system_prompt += (
+                " 你可以使用 workspace tools 列出及分段讀取必要文件；"
+                "工具內容只能補充脈絡，不得取代 COMPUTED_ANALYSIS_FACTS。"
+            )
+            answer = (
+                await AgentToolService(
+                    db=self.db,
+                    llm_service=self.llm,
+                ).answer_with_tools(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    knowledge_base_ids=payload.knowledge_base_ids,
+                    workspace_id=payload.workspace_id,
+                    top_k=payload.top_k,
+                    use_rerank=payload.use_rerank,
+                    principal=principal,
+                )
+            ).answer
+        else:
+            answer = await self.llm.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
         response_dlp = self.masking.scan_and_mask(answer, location="response")
         citations = CitationBuilder().from_chunks(used_chunks)
         report = None

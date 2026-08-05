@@ -16,7 +16,8 @@ questions or explains already-computed results.
 | Input | Route | Processing | LLM role |
 |---|---|---|---|
 | PDF, DOCX, PPTX, image, text | `POST /api/v1/documents/upload` with `scope=session` | Office files first use pywin32 COM; the document worker then converts to Markdown, chunks, embeds, and indexes only for the session | Answer from retrieved chunks |
-| XLSX or CSV for exact analysis | `POST /api/v1/analysis/files/upload` | XLSX first uses Excel COM, then is stored and profiled under a persistent Workspace; no chunks or embeddings are created | Optional explanation after calculation |
+| Workspace file for direct LLM reading | `POST /api/v1/analysis/files/upload` | Accepts document-upload formats; keeps the original and saves Markdown or Markdown tables without embedding | Tool-driven, cursor-based reading |
+| XLSX or CSV for exact analysis | Same route | Also keeps the existing profile and Parquet datasets for deterministic analysis | Optional explanation after calculation |
 
 Large spreadsheets must use the analysis route. They are not inserted into the
 knowledge base and are not treated as RAG documents.
@@ -104,7 +105,7 @@ is checked in addition to Workspace membership.
 
 ```mermaid
 flowchart TD
-    A["Select Workspace"] --> B["Upload XLSX or CSV"]
+    A["Select Workspace"] --> B["Upload a supported file"]
     B --> C["Profile and convert to Parquet"]
     C --> D["Inspect schema and samples"]
     D --> E{"Plan source"}
@@ -128,7 +129,7 @@ creates and returns the queued Job, so the frontend must not create a second Job
 
 | Method | Route | Purpose |
 |---|---|---|
-| POST | `/api/v1/analysis/files/upload` | Stream an XLSX/CSV; accepts `session_id`, or `workspace_id` without a Session |
+| POST | `/api/v1/analysis/files/upload` | Stream any document-upload format; accepts `session_id`, or `workspace_id` without a Session |
 | GET | `/api/v1/analysis/files?workspace_id=...` | List files directly by Workspace |
 | GET | `/api/v1/analysis/files?session_id=...` | Compatible route; resolves the Session's Workspace |
 | GET | `/api/v1/analysis/files/{file_id}` | Poll profile status, progress, errors, and dataset count |
@@ -267,10 +268,21 @@ JavaScript is evaluated.
 The LLM explanation endpoint receives only bounded result JSON. Its fixed prompt
 states that calculations are final, numbers must not be changed, and causal claims
 must not be invented. DLP masking and the shared LLM concurrency limiter are applied.
-No autonomous tool planning is required from the 31B model. Natural-language
+Workspace tool planning is opt-in with `use_tools`; otherwise no autonomous tools run.
+Natural-language
 planning is a two-step operation: the model emits JSON, the backend validates it
 against actual Parquet schemas, and the user must call `confirm` before a Job
-exists. A draft cannot execute Python, SQL, JavaScript, or arbitrary tool calls.
+exists. A draft cannot execute Python, SQL, JavaScript, or arbitrary server commands.
+
+### Workspace LLM tools
+
+`POST /api/v1/chat/query`, `/chat/stream`, `/code-chat/query`, and
+`/code-chat/stream` accept `workspace_id`. With `use_tools=true`, the available tools
+include `list_workspace_files` and `read_workspace_file`. Analysis plan/intent drafts,
+job explanation, and hybrid answer requests also inherit `use_tools` and their workspace.
+Reads enforce workspace and confidentiality permissions, apply DLP, return at most 8,000
+characters per call, and use `next_offset` to continue. Original binary paths are never
+returned to the model.
 
 ## Preprocessing and query engines
 

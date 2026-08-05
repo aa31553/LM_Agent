@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.constants import AnalysisJobStatus, AnalysisPlanDraftStatus
+from app.core.constants import AnalysisJobStatus, AnalysisPlanDraftStatus, ThinkingMode
 from app.schemas.chat import Citation, LLMUsage
 
 Scalar = str | int | float | bool | date | datetime | None
@@ -64,6 +64,9 @@ class AnalysisFileUploadResponse(BaseModel):
     profile_progress: int = Field(default=0, ge=0, le=100)
     profile_error: str | None = None
     dataset_count: int = 0
+    representation_format: str | None = None
+    llm_readable: bool = False
+    analysis_ready: bool = False
     profiled_at: datetime | None = None
     expires_at: datetime | None = None
 
@@ -134,6 +137,14 @@ class SortSpec(BaseModel):
     direction: Literal["asc", "desc"] = "asc"
 
 
+class ChartFieldSemantic(BaseModel):
+    semantic_type: str = Field(min_length=1, max_length=64)
+    data_type: Literal["quantitative", "nominal", "ordinal", "temporal"]
+    unit: str | None = Field(default=None, max_length=32)
+    sort_order: list[str] | None = Field(default=None, max_length=100)
+    intrinsic_domain: tuple[float, float] | None = None
+
+
 class ChartSpec(BaseModel):
     type: Literal["bar", "line", "scatter"]
     x_field: str
@@ -145,6 +156,7 @@ class ChartSpec(BaseModel):
     decimal_places: int = Field(default=2, ge=0, le=10)
     tooltip_fields: list[str] = Field(default_factory=list, max_length=20)
     zoom: bool = False
+    field_semantics: dict[str, ChartFieldSemantic] = Field(default_factory=dict)
 
 
 class DatasetSource(BaseModel):
@@ -313,7 +325,13 @@ class AnalysisExplanationResponse(BaseModel):
     usage: LLMUsage = Field(default_factory=LLMUsage)
 
 
-class AnalysisPlanDraftCreate(BaseModel):
+class AnalysisLLMRouteSelection(BaseModel):
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
+    use_tools: bool = False
+
+
+class AnalysisPlanDraftCreate(AnalysisLLMRouteSelection):
     workspace_id: UUID
     question: str = Field(min_length=2, max_length=4000)
     file_ids: list[UUID] = Field(min_length=1, max_length=8)
@@ -356,7 +374,11 @@ class AnalysisPlanDraftConfirmRequest(BaseModel):
     clarification_choice: str | None = Field(default=None, min_length=1, max_length=32)
 
 
-class AnalysisHybridRequest(BaseModel):
+class AnalysisExplanationRequest(AnalysisLLMRouteSelection):
+    pass
+
+
+class AnalysisHybridRequest(AnalysisLLMRouteSelection):
     workspace_id: UUID
     question: str = Field(min_length=2, max_length=4000)
     analysis_job_ids: list[UUID] = Field(min_length=1, max_length=10)

@@ -1,0 +1,19 @@
+{
+  "name": "lm-agent-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build:frontend": "esbuild frontend/src/chart-runtime.js --bundle --format=iife --global-name=LMFlintBundle --outfile=frontend/dist/chart-runtime.js",
+    "test:frontend": "npm run build:frontend && node tests/js/test_flint_chart_adapter.js && node tests/js/test_echarts_adapter.js"
+  },
+  "dependencies": {
+    "flint-chart": "0.4.1"
+  },
+  "devDependencies": {
+    "echarts": "6.1.0",
+    "esbuild": "0.25.8"
+  }
+}

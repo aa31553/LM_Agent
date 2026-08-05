@@ -1,23 +1,29 @@
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import ErrorCode
+from app.core.constants import ConfidentialLevel, ErrorCode, PermissionLevel
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.integrations.openai_compatible_client import ChatToolCall
+from app.models.analysis import AnalysisFile
 from app.repositories.document_repository import DocumentRepository
 from app.schemas.chat import ToolCallTrace
 from app.services.keyword_search_service import KeywordSearchService
 from app.services.llm_service import LLMService
+from app.services.masking_service import MaskingService
 from app.services.permission_service import PermissionService
 from app.services.prompt_budget_service import PromptBudgetService
 from app.services.rerank_service import RerankService
+from app.services.workspace_service import WorkspaceService
+from app.storage.workspace_storage import WorkspaceStorage
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,7 @@ class AgentToolService:
         top_k: int,
         use_rerank: bool,
         principal: Principal,
+        workspace_id: UUID | None = None,
         messages: list[dict[str, Any]] | None = None,
     ) -> AgentAnswer:
         started = time.perf_counter()
@@ -60,63 +67,83 @@ class AgentToolService:
             messages,
             reserved_tokens=settings.agent_tool_prompt_reserve_tokens,
         ).messages
-        first = await self.llm_service.complete_messages(
+        schemas = self.tool_schemas(workspace_id=workspace_id)
+        response = await self.llm_service.complete_messages(
             messages=messages,
-            tools=self.tool_schemas(),
+            tools=schemas,
             tool_choice="auto",
         )
-        if not first.tool_calls:
+        if not response.tool_calls:
             return AgentAnswer(
-                answer=first.content,
+                answer=response.content,
                 tool_calls=[],
                 latency_ms=int((time.perf_counter() - started) * 1000),
             )
 
-        selected_tool_calls = first.tool_calls[: self.max_tool_calls]
-        messages.append(
-            {
-                "role": "assistant",
-                "content": first.content or None,
-                "tool_calls": [self._openai_tool_call_payload(item) for item in selected_tool_calls],
-            }
-        )
         traces: list[ToolCallTrace] = []
         remaining_tool_chars = settings.agent_tool_context_max_chars
-        for tool_call in selected_tool_calls:
-            arguments = self._decode_arguments(tool_call.arguments)
-            result = await self.execute_tool(
-                tool_name=tool_call.name,
-                arguments=arguments,
-                knowledge_base_ids=knowledge_base_ids,
-                top_k=top_k,
-                use_rerank=use_rerank,
-                principal=principal,
-            )
-            traces.append(
-                ToolCallTrace(
-                    tool_name=tool_call.name,
-                    arguments=arguments,
-                    result=result,
-                )
-            )
+        fallback_answer = response.content or ""
+        while response.tool_calls and len(traces) < self.max_tool_calls:
+            selected_tool_calls = response.tool_calls[
+                : self.max_tool_calls - len(traces)
+            ]
             messages.append(
                 {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": self._bounded_tool_content(result, remaining_tool_chars),
+                    "role": "assistant",
+                    "content": response.content or None,
+                    "tool_calls": [
+                        self._openai_tool_call_payload(item) for item in selected_tool_calls
+                    ],
                 }
             )
-            remaining_tool_chars = max(
-                0,
-                remaining_tool_chars - len(messages[-1]["content"]),
+            for tool_call in selected_tool_calls:
+                arguments = self._decode_arguments(tool_call.arguments)
+                result = await self.execute_tool(
+                    tool_name=tool_call.name,
+                    arguments=arguments,
+                    knowledge_base_ids=knowledge_base_ids,
+                    top_k=top_k,
+                    use_rerank=use_rerank,
+                    principal=principal,
+                    workspace_id=workspace_id,
+                )
+                traces.append(
+                    ToolCallTrace(
+                        tool_name=tool_call.name,
+                        arguments=arguments,
+                        result=result,
+                    )
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": self._bounded_tool_content(result, remaining_tool_chars),
+                    }
+                )
+                remaining_tool_chars = max(
+                    0,
+                    remaining_tool_chars - len(messages[-1]["content"]),
+                )
+
+            self.prompt_budget_service.validate_messages(messages)
+            response = await self.llm_service.complete_messages(
+                messages=messages,
+                tools=schemas,
+                tool_choice="auto",
             )
+            fallback_answer = response.content or fallback_answer
 
         if self.db is not None:
             self.db.commit()
         self.prompt_budget_service.validate_messages(messages)
-        final = await self.llm_service.complete_messages(messages=messages)
+        if response.tool_calls:
+            final = await self.llm_service.complete_messages(messages=messages)
+            answer = final.content or fallback_answer
+        else:
+            answer = response.content or fallback_answer
         return AgentAnswer(
-            answer=final.content or first.content,
+            answer=answer,
             tool_calls=traces,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
@@ -130,6 +157,7 @@ class AgentToolService:
         top_k: int,
         use_rerank: bool,
         principal: Principal,
+        workspace_id: UUID | None = None,
     ) -> dict:
         if tool_name == "search_documents":
             return await self._search_documents(
@@ -141,7 +169,131 @@ class AgentToolService:
             )
         if tool_name == "get_document_status":
             return self._get_document_status(arguments=arguments, principal=principal)
+        if tool_name == "list_workspace_files":
+            return self._list_workspace_files(
+                workspace_id=workspace_id,
+                principal=principal,
+                arguments=arguments,
+            )
+        if tool_name == "read_workspace_file":
+            return self._read_workspace_file(
+                workspace_id=workspace_id,
+                principal=principal,
+                arguments=arguments,
+            )
         return {"error": f"Unknown tool: {tool_name}"}
+
+    def _list_workspace_files(
+        self,
+        *,
+        workspace_id: UUID | None,
+        principal: Principal,
+        arguments: dict,
+    ) -> dict:
+        if self.db is None:
+            raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
+        if workspace_id is None:
+            return {"error": "workspace_id is required"}
+        WorkspaceService(self.db).get(workspace_id, principal, PermissionLevel.READ)
+        try:
+            limit = max(1, min(int(arguments.get("limit", 50)), 100))
+        except (TypeError, ValueError):
+            limit = 50
+        sources = list(
+            self.db.scalars(
+                select(AnalysisFile)
+                .where(AnalysisFile.workspace_id == workspace_id)
+                .order_by(AnalysisFile.created_at.desc())
+                .limit(limit)
+            )
+        )
+        items = []
+        for source in sources:
+            if source.expires_at is not None and source.expires_at <= datetime.utcnow():
+                continue
+            try:
+                self.permission_service.ensure_level_access(
+                    principal,
+                    ConfidentialLevel(source.confidential_level),
+                )
+            except APIError:
+                continue
+            manifest = source.dataset_manifest or {}
+            items.append(
+                {
+                    "file_id": str(source.id),
+                    "filename": source.original_filename,
+                    "file_type": source.file_type,
+                    "status": source.status,
+                    "representation_format": manifest.get("representation_format"),
+                    "llm_readable": bool(manifest.get("representation_path")),
+                    "analysis_ready": bool(manifest.get("datasets")),
+                    "size_bytes": source.size_bytes,
+                }
+            )
+        return {"workspace_id": str(workspace_id), "files": items}
+
+    def _read_workspace_file(
+        self,
+        *,
+        workspace_id: UUID | None,
+        principal: Principal,
+        arguments: dict,
+    ) -> dict:
+        if self.db is None:
+            raise APIError(ErrorCode.INTERNAL_ERROR, "Database session is not configured.", 500)
+        if workspace_id is None:
+            return {"error": "workspace_id is required"}
+        try:
+            file_id = UUID(str(arguments.get("file_id") or ""))
+        except ValueError:
+            return {"error": "file_id must be a UUID"}
+        source = self.db.get(AnalysisFile, file_id)
+        if source is None or (
+            source.expires_at is not None and source.expires_at <= datetime.utcnow()
+        ):
+            return {"error": "workspace file not found"}
+        WorkspaceService(self.db).get(source.workspace_id, principal, PermissionLevel.READ)
+        self.permission_service.ensure_level_access(
+            principal,
+            ConfidentialLevel(source.confidential_level),
+        )
+        if source.workspace_id != workspace_id:
+            return {"error": "file does not belong to the active workspace"}
+        manifest = source.dataset_manifest or {}
+        representation_path = manifest.get("representation_path")
+        if source.status != "ready" or not representation_path:
+            return {
+                "error": "workspace file is not ready for reading",
+                "status": source.status,
+            }
+        try:
+            cursor = max(0, int(arguments.get("cursor", 0)))
+            requested_chars = int(arguments.get("max_chars", 6000))
+        except (TypeError, ValueError):
+            return {"error": "cursor and max_chars must be integers"}
+        max_chars = max(
+            1,
+            min(requested_chars, settings.agent_tool_context_max_chars, 8000),
+        )
+        segment = WorkspaceStorage().read_text_segment(
+            representation_path,
+            offset=cursor,
+            max_chars=max_chars,
+        )
+        if segment is None:
+            return {"error": "workspace representation is unavailable"}
+        dlp = MaskingService(self.db).scan_and_mask(segment["content"], location="context")
+        if dlp.blocked:
+            return {"error": "workspace file segment was blocked by DLP"}
+        return {
+            "workspace_id": str(workspace_id),
+            "file_id": str(source.id),
+            "filename": source.original_filename,
+            "representation_format": manifest.get("representation_format"),
+            **segment,
+            "content": dlp.text,
+        }
 
     async def _search_documents(
         self,
@@ -275,8 +427,8 @@ class AgentToolService:
         keep = max(0, remaining_chars - len(marker))
         return f"{serialized[:keep]}{marker}"
 
-    def tool_schemas(self) -> list[dict]:
-        return [
+    def tool_schemas(self, *, workspace_id: UUID | None = None) -> list[dict]:
+        schemas = [
             {
                 "type": "function",
                 "function": {
@@ -311,3 +463,47 @@ class AgentToolService:
                 },
             },
         ]
+        if workspace_id is not None:
+            schemas.extend(
+                [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "list_workspace_files",
+                            "description": (
+                                "List files in the active workspace before choosing a file to read."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                                },
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_workspace_file",
+                            "description": (
+                                "Read one LLM-ready workspace file segment. Continue with the returned "
+                                "next_offset cursor only when more content is needed."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "file_id": {"type": "string", "format": "uuid"},
+                                    "cursor": {"type": "integer", "minimum": 0},
+                                    "max_chars": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 8000,
+                                    },
+                                },
+                                "required": ["file_id"],
+                            },
+                        },
+                    },
+                ]
+            )
+        return schemas

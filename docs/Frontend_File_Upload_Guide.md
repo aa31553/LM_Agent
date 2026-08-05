@@ -15,12 +15,13 @@
 | --- | --- | --- | --- | --- |
 | 單次對話閱讀、摘要、比對文件 | PDF、DOCX、PPTX、圖片、文字、程式碼 | `POST /documents/upload`，`scope=session` | 轉 Markdown、切片、Embedding、Session 內檢索 | Chat JSON 或 SSE |
 | 長期保存並供多人依權限查詢 | 同上 | `POST /documents/upload`，`scope=knowledge_base` | 轉 Markdown、切片、Embedding、知識庫索引 | Chat JSON 或 SSE |
-| Excel／CSV 欄位提取、篩選、分組與統計 | XLSX、CSV | `POST /analysis/files/upload` | 不進知識庫；由後端依白名單計畫確定性運算 | Table／Chart JSON |
+| Workspace 文件閱讀 | 與知識庫相同格式 | `POST /analysis/files/upload` | 不做 embedding；保存 Markdown／Markdown 表格並由 tools 分段讀取 | LLM 回答 |
+| Excel／CSV 欄位提取、篩選、分組與統計 | XLSX、CSV | 同上 | 額外保留 Parquet/profile，由後端依白名單計畫確定性運算 | Table／Chart JSON |
 
 不要用 `/documents/upload` 處理大型 Excel 的精確統計。該路徑的目的是將內容轉為
 可檢索文字，適合問答，不保證能保留完整表格型別、全部列數與精確計算結果。
 
-反過來，`/analysis/files/upload` 只接受 `.xlsx` 與 `.csv`，不會建立文件 chunk、
+反過來，`/analysis/files/upload` 接受與知識庫相同的格式，不會建立文件 chunk、
 Embedding 或知識庫內容，也不能直接用附件問答 API 檢索。
 
 DOCX／XLSX／PPTX 的前端請求格式不變。後端 worker 會先以 pywin32 呼叫實際
@@ -406,7 +407,7 @@ async function uploadKnowledgeBaseDocument(
 - 同樣必須輪詢至 `ready` 後才能穩定檢索。
 - 知識庫文件是長期資料；刪除 Chat Session 不會刪除它。
 
-## 5. Excel／CSV 分析工作區
+## 5. Workspace 文件與 Excel／CSV 分析
 
 ### 5.1 前端狀態流程
 

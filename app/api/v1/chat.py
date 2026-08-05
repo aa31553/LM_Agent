@@ -91,7 +91,11 @@ def _rag_service(
     payload: ChatQueryRequest,
     principal: Principal,
 ) -> RAGService:
-    service = RAGService(db=db)
+    service = RAGService(
+        db=db,
+        model=payload.model,
+        thinking_mode=payload.thinking_mode,
+    )
     if payload.attachment_ids or payload.retrieval_scope != RetrievalScope.AUTO:
         retriever = ScopedHybridRetriever(
             db=db,

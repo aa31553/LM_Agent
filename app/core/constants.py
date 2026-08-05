@@ -62,6 +62,14 @@ class ChatType(TextEnum):
     CODE = "code"
 
 
+class ThinkingMode(TextEnum):
+    DEFAULT = "default"
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class RetrievalScope(TextEnum):
     AUTO = "auto"
     ATTACHMENTS_ONLY = "attachments_only"

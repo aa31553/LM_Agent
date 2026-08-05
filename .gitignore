@@ -9,3 +9,5 @@ __pycache__/
 data/
 .tools/
 .venv/
+.npm/
+node_modules/

@@ -8,6 +8,7 @@ from fastapi.openapi.docs import (
     get_swagger_ui_html,
     get_swagger_ui_oauth2_redirect_html,
 )
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
@@ -17,6 +18,7 @@ from app.core.logging import configure_logging
 from app.db.startup import ensure_database_ready
 
 DOCS_ASSETS_DIR = Path(__file__).resolve().parent / "static" / "docs"
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 DOCS_ASSETS_URL = "/docs-assets"
 PRECOMPRESSED_DOCS_ASSETS = {
     "redoc.standalone.js": "text/javascript; charset=utf-8",
@@ -91,6 +93,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+    if FRONTEND_DIR.is_dir():
+        app.mount("/console", StaticFiles(directory=FRONTEND_DIR, html=True), name="console")
+
+        @app.get("/", include_in_schema=False)
+        async def console_redirect():
+            return RedirectResponse(url="/console/")
     return app
 
 

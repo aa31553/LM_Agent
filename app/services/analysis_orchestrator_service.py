@@ -4,6 +4,13 @@ from copy import deepcopy
 from datetime import datetime
 from uuid import UUID
 
+from app.schemas.analysis_recipe import AnalysisClarification, IntentDraft
+from app.services.analysis_intent_semantic_service import AnalysisIntentSemanticService
+from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
+from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
+from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
+from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
+from app.services.dataset_query_service import DatasetQueryService
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -13,6 +20,7 @@ from app.core.constants import (
     AnalysisPlanDraftStatus,
     ErrorCode,
     PermissionLevel,
+    ThinkingMode,
 )
 from app.core.exceptions import APIError
 from app.core.security import Principal
@@ -23,15 +31,9 @@ from app.schemas.analysis import (
     AnalysisPlanDraftCreate,
     AnalysisPlanDraftResponse,
 )
-from app.schemas.analysis_recipe import AnalysisClarification, IntentDraft
-from app.services.analysis_intent_semantic_service import AnalysisIntentSemanticService
+from app.services.agent_tool_service import AgentToolService
 from app.services.analysis_job_service import AnalysisJobService
-from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
-from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
-from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
-from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
 from app.services.audit_service import AuditService
-from app.services.dataset_query_service import DatasetQueryService
 from app.services.llm_service import LLMService
 from app.services.workspace_service import WorkspaceService
 
@@ -39,9 +41,19 @@ from app.services.workspace_service import WorkspaceService
 class AnalysisOrchestratorService:
     """Turn natural language into a validated draft; never execute it implicitly."""
 
-    def __init__(self, db: Session, llm_service: LLMService | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        llm_service: LLMService | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
-        self.llm_service = llm_service or LLMService()
+        self.llm_service = llm_service or LLMService(
+            model=model,
+            thinking_mode=thinking_mode,
+        )
         self.jobs = AnalysisJobService(db)
         self.normalizer = AnalysisPlanNormalizer()
         self.repair_service = AnalysisPlanRepairService(self.llm_service)
@@ -75,7 +87,8 @@ class AnalysisOrchestratorService:
         not_ready = [
             str(source.id)
             for source in sources
-            if source.status != AnalysisFileStatus.READY.value or not source.dataset_manifest
+            if source.status != AnalysisFileStatus.READY.value
+            or not (source.dataset_manifest or {}).get("datasets")
         ]
         if not_ready:
             raise APIError(
@@ -98,10 +111,30 @@ class AnalysisOrchestratorService:
             question=payload.question,
             schema_context=schema_context,
         )
-        raw = await self.llm_service.complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
+        if payload.use_tools:
+            system_prompt += (
+                " 你可以使用 workspace tools 先列出工作區文件，再按需要分段讀取；"
+                "只讀取完成此分析計畫所需的內容。"
+            )
+            raw = (
+                await AgentToolService(
+                    db=self.db,
+                    llm_service=self.llm_service,
+                ).answer_with_tools(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    knowledge_base_ids=[],
+                    workspace_id=payload.workspace_id,
+                    top_k=8,
+                    use_rerank=False,
+                    principal=principal,
+                )
+            ).answer
+        else:
+            raw = await self.llm_service.complete(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
         plan_payload = self._extract_json(raw)
         raw_plan_payload = deepcopy(plan_payload)
         default_source = None
@@ -230,6 +263,15 @@ class AnalysisOrchestratorService:
                 "file_ids": [str(item) for item in payload.file_ids],
                 "repair_attempted": repair_attempted,
             }
+            route = getattr(self.llm_service, "route", None)
+            if route is not None:
+                audit_metadata.update(
+                    {
+                        "llm_route": route.selection,
+                        "llm_model": route.model,
+                        "thinking_mode": route.thinking_mode,
+                    }
+                )
             audit.record_event(
                 "analysis_intent_created",
                 "A high-level analysis intent draft was created.",

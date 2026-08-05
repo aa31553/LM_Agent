@@ -1,7 +1,25 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LLMModelRouteSettings(BaseModel):
+    """Server-side allowlisted route for a frontend model selection."""
+
+    base_url: str
+    api_path: str = "/v1/chat/completions"
+    api_key: str = ""
+    ssl_verify: bool = True
+    model: str
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    temperature: float | None = None
+    top_p: float | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    reasoning_effort: str = ""
+    allowed_thinking_modes: list[str] = Field(
+        default_factory=lambda: ["default", "none", "low", "medium", "high"]
+    )
 
 
 class Settings(BaseSettings):
@@ -46,6 +64,9 @@ class Settings(BaseSettings):
     llm_context_window_tokens: int = Field(default=32768, ge=2048)
     llm_prompt_safety_margin_tokens: int = Field(default=1024, ge=0)
     llm_reasoning_effort: str = ""
+    llm_default_route: str = ""
+    llm_model_routes: dict[str, LLMModelRouteSettings] = Field(default_factory=dict)
+    llm_allowed_thinking_modes: list[str] = ["default", "none", "low", "medium", "high"]
     llm_send_images_to_model: bool = False
     chat_request_timeout_seconds: float = Field(default=180.0, gt=0)
     chat_queue_timeout_seconds: float = Field(default=15.0, gt=0)

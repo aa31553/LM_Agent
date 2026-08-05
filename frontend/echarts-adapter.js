@@ -62,6 +62,10 @@
 
   function toEChartsOption(chart) {
     assertChart(chart);
+    const flintRuntime = globalThis.LMFlintCharts;
+    if (flintRuntime?.supportsFlint(chart)) {
+      return flintRuntime.compile(chart);
+    }
     if (chart.schema_version === "3.0" && chart.semantic_type === "pareto") {
       return toParetoOption(chart);
     }
@@ -392,7 +396,9 @@
     }
     const instance =
       echartsRuntime.getInstanceByDom(container) || echartsRuntime.init(container);
-    instance.setOption(toEChartsOption(chart), true);
+    const option = toEChartsOption(chart);
+    instance.setOption(option, true);
+    instance.__lmChartWarnings = option._warnings || [];
     return instance;
   }
 

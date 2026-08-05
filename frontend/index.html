@@ -18,6 +18,7 @@
         </div>
         <nav class="nav" aria-label="Primary navigation">
           <button class="nav-item active" data-tab="overview">Overview</button>
+          <button class="nav-item" data-tab="analysis">Analysis</button>
           <button class="nav-item" data-tab="knowledge">Knowledge</button>
           <button class="nav-item" data-tab="llmwiki">LLMWiki</button>
           <button class="nav-item" data-tab="documents">Documents</button>
@@ -51,6 +52,7 @@
         <section id="globalAlert" class="alert" hidden></section>
 
         <section id="overview" class="tab-panel active"></section>
+        <section id="analysis" class="tab-panel"></section>
         <section id="knowledge" class="tab-panel"></section>
         <section id="llmwiki" class="tab-panel"></section>
         <section id="documents" class="tab-panel"></section>
@@ -63,6 +65,7 @@
     </div>
 
     <script src="./vendor/echarts.min.js"></script>
+    <script src="./dist/chart-runtime.js"></script>
     <script src="./echarts-adapter.js"></script>
     <script src="./app.js"></script>
   </body>

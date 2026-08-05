@@ -79,6 +79,55 @@ class WorkspaceStorage:
         self._write_json(path, payload)
         return str(path)
 
+    def llm_content_path(
+        self,
+        workspace_id: UUID,
+        file_id: UUID,
+    ) -> Path:
+        return self._scoped_path(
+            workspace_id,
+            "files",
+            file_id,
+            "llm",
+            "content.md",
+        )
+
+    def save_llm_content(
+        self,
+        workspace_id: UUID,
+        file_id: UUID,
+        content: str,
+    ) -> str:
+        path = self.llm_content_path(workspace_id, file_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".md.tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+        return str(path)
+
+    def read_text_segment(
+        self,
+        raw_path: str,
+        *,
+        offset: int,
+        max_chars: int,
+    ) -> dict[str, Any] | None:
+        path = self._validate_existing_file(raw_path)
+        if path is None or offset < 0 or max_chars < 1:
+            return None
+        with path.open("r", encoding="utf-8") as handle:
+            handle.seek(offset)
+            content = handle.read(max_chars)
+            next_offset = handle.tell()
+            eof = handle.read(1) == ""
+        return {
+            "content": content,
+            "offset": offset,
+            "next_offset": None if eof else next_offset,
+            "eof": eof,
+            "total_size_bytes": path.stat().st_size,
+        }
+
     def dataset_path(
         self,
         workspace_id: UUID,

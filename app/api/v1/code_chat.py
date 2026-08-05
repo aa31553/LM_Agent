@@ -83,7 +83,11 @@ def _code_chat_service(
     payload: CodeChatRequest,
     principal: Principal,
 ) -> CodeChatService:
-    service = CodeChatService(db=db)
+    service = CodeChatService(
+        db=db,
+        model=payload.model,
+        thinking_mode=payload.thinking_mode,
+    )
     if payload.attachment_ids or payload.retrieval_scope != RetrievalScope.AUTO:
         retriever = ScopedHybridRetriever(
             db=db,

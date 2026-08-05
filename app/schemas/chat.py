@@ -3,11 +3,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.constants import ChatType, RetrievalScope, RiskLevel
+from app.core.constants import ChatType, RetrievalScope, RiskLevel, ThinkingMode
 
 
 class ChatQueryRequest(BaseModel):
     session_id: UUID | None = None
+    workspace_id: UUID | None = None
     knowledge_base_ids: list[UUID] = Field(default_factory=list, max_length=20)
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
     retrieval_scope: RetrievalScope = RetrievalScope.AUTO
@@ -16,6 +17,8 @@ class ChatQueryRequest(BaseModel):
     use_rerank: bool = True
     use_masking: bool = True
     use_tools: bool = False
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
 
     @model_validator(mode="after")
     def validate_retrieval_scope(self):

@@ -1,7 +1,7 @@
 import re
 from collections.abc import AsyncIterator
 
-from app.core.constants import ChatType
+from app.core.constants import ChatType, ThinkingMode
 from app.core.security import Principal
 from app.schemas.chat import (
     CodeBlock,
@@ -26,8 +26,18 @@ _CHANGE_TITLE_PATTERN = re.compile(r"^\s*#{4,6}\s+(?P<title>.+?)\s*$", re.MULTIL
 class CodeChatService:
     """Code-specific façade over the audited RAG pipeline."""
 
-    def __init__(self, db=None) -> None:
-        self.rag_service = RAGService(db=db)
+    def __init__(
+        self,
+        db=None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
+        self.rag_service = RAGService(
+            db=db,
+            model=model,
+            thinking_mode=thinking_mode,
+        )
         self.prompt_budget_service = PromptBudgetService()
 
     async def answer(

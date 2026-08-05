@@ -1,12 +1,28 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.core.constants import ThinkingMode
 from app.integrations.openai_compatible_client import ChatCompletionResult, OpenAICompatibleClient
 
 
 class LLMService:
-    def __init__(self, client: OpenAICompatibleClient | None = None) -> None:
-        self.client = client or OpenAICompatibleClient()
+    def __init__(
+        self,
+        client: OpenAICompatibleClient | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
+        self.client = client or OpenAICompatibleClient(
+            model=model,
+            thinking_mode=thinking_mode,
+        )
+
+    @property
+    def route(self):
+        """Return the resolved server-side route used by this service."""
+
+        return self.client.route
 
     async def complete(
         self,
