@@ -2,6 +2,19 @@ from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from app.schemas.analysis_recipe import (
+    AnalysisIntentValidateRequest,
+    AnalysisIntentValidationResponse,
+    RecipeDefinition,
+    RecipeListResponse,
+    RecipeMetricsResponse,
+)
+from app.services.analysis_artifact_service import AnalysisArtifactService
+from app.services.analysis_metrics_service import AnalysisMetricsService
+from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
+from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
+from app.services.chat_runtime_service import chat_runtime_service
+from app.services.dataset_query_service import DatasetQueryService
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi import status as http_status
 from sqlalchemy import delete, select
@@ -45,32 +58,29 @@ from app.schemas.analysis import (
     AnalysisReportRequest,
     SpreadsheetInspectionResponse,
 )
-from app.schemas.analysis_recipe import (
-    AnalysisIntentValidateRequest,
-    AnalysisIntentValidationResponse,
-    RecipeDefinition,
-    RecipeListResponse,
-    RecipeMetricsResponse,
-)
-from app.services.analysis_artifact_service import AnalysisArtifactService
 from app.services.analysis_job_service import AnalysisJobService
-from app.services.analysis_metrics_service import AnalysisMetricsService
 from app.services.analysis_orchestrator_service import AnalysisOrchestratorService
-from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
-from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
 from app.services.audit_service import AuditService
-from app.services.chat_runtime_service import chat_runtime_service
-from app.services.dataset_query_service import DatasetQueryService
 from app.services.hybrid_analysis_service import HybridAnalysisService
 from app.services.permission_service import PermissionService
 from app.services.spreadsheet_analysis_service import SpreadsheetAnalysisService
 from app.services.spreadsheet_profile_job_service import SpreadsheetProfileJobService
 from app.services.workspace_service import WorkspaceService
 from app.storage.workspace_storage import WorkspaceStorage
-from app.utils.file_utils import infer_file_type
+from app.utils.file_utils import infer_file_type, is_supported_upload
 from app.utils.llm_usage import get_llm_token_usage, reset_llm_token_usage
 
 router = APIRouter()
+
+
+def _representation_fields(source: AnalysisFile) -> dict:
+    manifest = source.dataset_manifest or {}
+    datasets = manifest.get("datasets") or []
+    return {
+        "representation_format": manifest.get("representation_format"),
+        "llm_readable": bool(manifest.get("representation_path")),
+        "analysis_ready": bool(datasets),
+    }
 
 
 def _ensure_recipes_enabled() -> None:
@@ -180,10 +190,10 @@ async def upload_analysis_file(
             400,
         )
     file_type = infer_file_type(file.filename)
-    if file_type not in SpreadsheetAnalysisService.SUPPORTED_TYPES:
+    if not is_supported_upload(file.filename):
         raise APIError(
             ErrorCode.INVALID_REQUEST,
-            "The analysis workspace accepts only .xlsx and .csv files.",
+            "Unsupported workspace file type. Use the same formats accepted by document upload.",
             400,
         )
     PermissionService(db).ensure_level_access(principal, confidential_level)
@@ -225,7 +235,11 @@ async def upload_analysis_file(
             file_id,
             stored_filename,
             file,
-            max_bytes=settings.analysis_upload_max_bytes,
+            max_bytes=(
+                settings.analysis_upload_max_bytes
+                if file_type in SpreadsheetAnalysisService.SUPPORTED_TYPES
+                else settings.document_max_upload_bytes
+            ),
         )
     except ValueError as exc:
         raise APIError(
@@ -271,7 +285,7 @@ async def upload_analysis_file(
         raise
     audit_service.record_event(
         "analysis_file_uploaded",
-        "A workspace spreadsheet was uploaded for deterministic analysis.",
+        "A workspace file was uploaded for LLM-readable preprocessing.",
         {
             "workspace_id": str(workspace.id),
             "filename": file.filename,
@@ -298,6 +312,7 @@ async def upload_analysis_file(
         status=source.status,
         profile_progress=source.profile_progress,
         expires_at=None,
+        **_representation_fields(source),
     )
 
 
@@ -353,6 +368,7 @@ def list_analysis_files(
                 profiled_at=source.profiled_at,
                 expires_at=source.expires_at,
                 created_at=source.created_at,
+                **_representation_fields(source),
             )
             for source in sources
             if source.expires_at is None or source.expires_at > datetime.utcnow()
@@ -370,6 +386,12 @@ def inspect_analysis_file(
     db: Session = Depends(get_db),
 ) -> SpreadsheetInspectionResponse:
     source = AnalysisJobService(db).get_analysis_file(file_id, principal)
+    if not (source.dataset_manifest or {}).get("datasets"):
+        raise APIError(
+            ErrorCode.INVALID_REQUEST,
+            "This workspace file is LLM-readable but is not a deterministic spreadsheet dataset.",
+            409,
+        )
     storage = WorkspaceStorage()
     cached = storage.load_json(source.profile_path) if source.profile_path is not None else None
     if cached is not None and isinstance(cached.get("sheets"), list):
@@ -429,6 +451,7 @@ def get_analysis_file(
         profiled_at=source.profiled_at,
         expires_at=source.expires_at,
         created_at=source.created_at,
+        **_representation_fields(source),
     )
 
 
@@ -456,6 +479,7 @@ def retry_spreadsheet_profile(
         dataset_count=0,
         profiled_at=source.profiled_at,
         expires_at=source.expires_at,
+        **_representation_fields(source),
     )
 
 
@@ -696,6 +720,8 @@ async def explain_analysis_job(
             thinking_mode=(
                 payload.thinking_mode if payload is not None else ThinkingMode.DEFAULT
             ),
+            use_tools=payload.use_tools if payload is not None else False,
+            principal=principal,
         )
     raw_usage = get_llm_token_usage()
     return AnalysisExplanationResponse(

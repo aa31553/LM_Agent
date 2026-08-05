@@ -224,6 +224,7 @@ ChatQueryRequest:
   use_rerank: boolean = true
   use_masking: boolean = true
   use_tools: boolean = false
+  workspace_id: UUID|null
 
 ChatQueryResponse:
   request_id: string
@@ -428,7 +429,7 @@ WorkspacePermissionCreate:
   permission: read|write|admin
 
 AnalysisFileUploadMultipart:
-  file: binary(required; xlsx|csv)
+  file: binary(required; same formats as document upload)
   session_id: UUID|null
   workspace_id: UUID|null
   confidential_level: ConfidentialLevel = internal
@@ -442,9 +443,12 @@ AnalysisFileUploadMultipart:
 AnalysisFileUploadResponse:
   file_id: UUID
   workspace_id: UUID
+  representation_format: string|null  # markdown | markdown_table | markdown_ocr
+  llm_readable: boolean
+  analysis_ready: boolean  # true only for XLSX/CSV with Parquet datasets
   session_id: UUID|null
   filename: string
-  file_type: xlsx|csv
+  file_type: pdf|image|office|text|structured|code extension
   size_bytes: integer
   status: profile_queued|profiling|ready|failed
   profile_progress: integer(0..100)

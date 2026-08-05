@@ -506,7 +506,7 @@ Main API groups:
 | Code Chat | `/api/v1/code-chat` | Code-oriented question answering |
 | Documents | `/api/v1/documents` | Document upload and management |
 | Workspace | `/api/v1/workspaces` | Persistent analysis ownership and sharing |
-| Analysis | `/api/v1/analysis` | Workspace-scoped XLSX/CSV deterministic analysis |
+| Analysis | `/api/v1/analysis` | Workspace files, LLM-readable representations, and deterministic spreadsheet analysis |
 | Skills | `/api/v1/skills` | Skill CRUD, bundled files, and raw previews |
 | Knowledge Bases | `/api/v1/knowledge-bases` | Knowledge base management |
 | LLMWiki | `/api/v1/llmwiki` | Durable compiled knowledge pages and graph |
@@ -616,11 +616,17 @@ documents but only detaches Workspace analysis data. Files and results remain
 available to other linked Sessions until the file or Workspace is explicitly
 deleted.
 
+Workspace upload accepts the same PDF, image, Office, text, structured, and code formats
+as document upload. It keeps the original and creates a non-embedded LLM representation:
+XLSX/CSV and structured data become Markdown tables; documents and OCR output become
+Markdown. Chat and Code Chat requests can provide `workspace_id` with `use_tools=true`;
+the model can then call `list_workspace_files` and cursor-based `read_workspace_file`.
+
 Large XLSX/CSV files that require exact filtering, grouping, aggregation, or chart
 data use `/api/v1/analysis`, not document RAG. The analysis worker computes bounded
 table/chart JSON without executing model-generated Python, SQL, or JavaScript:
 
-New spreadsheet uploads are profiled in the background. XLSX Sheets and CSV
+New workspace uploads are processed in the background. XLSX Sheets and CSV
 sources are converted to Parquet with DuckDB, profiled and queried through Polars,
 and exposed only after the file reaches `ready`. Advanced plans support
 multi-Sheet/file Join, date buckets, Pivot, percentile, and correlation.

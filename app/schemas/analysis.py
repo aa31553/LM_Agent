@@ -64,6 +64,9 @@ class AnalysisFileUploadResponse(BaseModel):
     profile_progress: int = Field(default=0, ge=0, le=100)
     profile_error: str | None = None
     dataset_count: int = 0
+    representation_format: str | None = None
+    llm_readable: bool = False
+    analysis_ready: bool = False
     profiled_at: datetime | None = None
     expires_at: datetime | None = None
 
@@ -325,6 +328,7 @@ class AnalysisExplanationResponse(BaseModel):
 class AnalysisLLMRouteSelection(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=128)
     thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
+    use_tools: bool = False
 
 
 class AnalysisPlanDraftCreate(AnalysisLLMRouteSelection):

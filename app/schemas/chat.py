@@ -8,6 +8,7 @@ from app.core.constants import ChatType, RetrievalScope, RiskLevel, ThinkingMode
 
 class ChatQueryRequest(BaseModel):
     session_id: UUID | None = None
+    workspace_id: UUID | None = None
     knowledge_base_ids: list[UUID] = Field(default_factory=list, max_length=20)
     attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
     retrieval_scope: RetrievalScope = RetrievalScope.AUTO
