@@ -1,9 +1,8 @@
-"""CPU-isolated, bounded PDF parsing used by the document worker.
+"""CPU-isolated OCR fallback and image extraction used by the document worker.
 
 This module deliberately keeps its entry point at module scope so it can run with
-the ``spawn`` multiprocessing start method used on Windows.  One ``PdfReader`` is
-shared by text extraction and embedded-image extraction; the API process never
-imports or executes this work.
+the ``spawn`` multiprocessing start method used on Windows. The API process never
+imports or executes this fallback work.
 """
 
 from __future__ import annotations
@@ -59,12 +58,13 @@ def process_pdf_file(
     image_max_count: int,
     enable_image_ocr: bool,
     image_ocr_max_count: int,
+    force_pdf_ocr: bool = False,
 ) -> PDFProcessingResult:
     """Parse text and optional images in one CPU worker process.
 
-    A page timeout is checked after each pypdf extraction.  The parent process
-    supplies the hard whole-job timeout and terminates this child if it gets stuck
-    inside a parser call that cannot be interrupted safely.
+    The ordinary PDF path uses MarkItDown. This compatibility path runs only when
+    MarkItDown produced no text and the document therefore needs the existing OCR
+    flow. The parent process supplies the hard whole-job timeout.
     """
 
     source = Path(file_path)
@@ -90,10 +90,13 @@ def process_pdf_file(
 
     for page_number, page in enumerate(reader.pages, start=1):
         started_at = perf_counter()
-        try:
-            layout_text = page.extract_text(extraction_mode="layout") or ""
-        except TypeError:
-            layout_text = page.extract_text() or ""
+        if force_pdf_ocr:
+            layout_text = ""
+        else:
+            try:
+                layout_text = page.extract_text(extraction_mode="layout") or ""
+            except TypeError:
+                layout_text = page.extract_text() or ""
         elapsed = perf_counter() - started_at
         if elapsed > page_timeout_seconds:
             raise PDFProcessingLimitError(

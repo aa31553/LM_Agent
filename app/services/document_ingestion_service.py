@@ -40,6 +40,10 @@ from app.services.markdown_conversion_service import MarkdownConversionService
 from app.services.office_file_preparation_service import OfficeFilePreparationService
 from app.services.office_parser_service import OfficeParserService
 from app.services.pdf_image_extraction_service import PDFImageExtractionService
+from app.services.pdf_markdown_conversion_service import (
+    PDFMarkdownResult,
+    convert_pdf_with_markitdown,
+)
 from app.services.pdf_parser_service import PDFParserService
 from app.services.pdf_processing_service import (
     PDFProcessingResult,
@@ -58,7 +62,7 @@ from app.utils.file_utils import (
 )
 from app.utils.language_detector import detect_language
 from app.utils.text_utils import clean_db_text
-from app.workers.process_runner import run_in_process
+from app.workers.process_runner import ProcessWorkerError, run_in_process
 
 logger = logging.getLogger(__name__)
 
@@ -533,31 +537,44 @@ class DocumentIngestionService:
         document.updated_at = datetime.utcnow()
         self.db.commit()
 
-        result = await self._run_pdf_processing(document)
-        parsed = result.parsed
-        document.page_count = parsed.page_count
-        document.ocr_required = result.used_pdf_ocr or parsed.ocr_required
-        document.ocr_confidence = parsed.ocr_confidence
-        if parsed.ocr_required and not result.used_pdf_ocr:
-            document.status = DocumentStatus.FAILED.value
-            document.error_message = (
-                "PDF contains no extractable text and PDF OCR is disabled. "
-                "Enable PDF_OCR_ENABLED to process scanned PDFs."
+        try:
+            markdown_result = await self._run_pdf_markdown_conversion(document)
+        except ProcessWorkerError as exc:
+            logger.warning(
+                "pdf_markitdown_conversion_failed_using_ocr_fallback",
+                extra={"document_id": str(document.id), "error": str(exc)},
             )
-            document.updated_at = datetime.utcnow()
-            self.db.commit()
-            return
+            markdown_result = PDFMarkdownResult(markdown="", page_count=0)
+        document.page_count = markdown_result.page_count
+        document.ocr_required = False
+        document.ocr_confidence = None
+        converted_markdown = markdown_result.markdown
+        image_models: list[DocumentImage] = []
 
-        image_models = self._document_images_from_pdf_result(document, result.images)
-        if image_models:
-            DocumentImageRepository(self.db).add_many(image_models)
-            self.db.flush()
+        if not converted_markdown.strip():
+            result = await self._run_pdf_processing(document, force_pdf_ocr=True)
+            parsed = result.parsed
+            document.page_count = parsed.page_count
+            document.ocr_required = True
+            document.ocr_confidence = parsed.ocr_confidence
+            if not result.used_pdf_ocr:
+                document.status = DocumentStatus.FAILED.value
+                document.error_message = (
+                    "MarkItDown found no extractable PDF text and PDF OCR is disabled. "
+                    "Enable PDF_OCR_ENABLED to process scanned PDFs."
+                )
+                document.updated_at = datetime.utcnow()
+                self.db.commit()
+                return
 
-        # Do not call MarkItDown for PDFs here: it would reopen the same file after
-        # pypdf has already supplied the normalized text used by image extraction.
-        converted_markdown = self.markdown_converter.from_extracted_text(
-            document.title, parsed.text
-        )
+            image_models = self._document_images_from_pdf_result(document, result.images)
+            if image_models:
+                DocumentImageRepository(self.db).add_many(image_models)
+                self.db.flush()
+            converted_markdown = self.markdown_converter.from_extracted_text(
+                document.title, parsed.text
+            )
+
         converted_markdown = self._append_image_markdown(converted_markdown, image_models)
         if not converted_markdown.strip():
             document.status = DocumentStatus.FAILED.value
@@ -597,7 +614,28 @@ class DocumentIngestionService:
         self.db.commit()
         self.db.refresh(document)
 
-    async def _run_pdf_processing(self, document: Document) -> PDFProcessingResult:
+    async def _run_pdf_markdown_conversion(self, document: Document) -> PDFMarkdownResult:
+        timeout_seconds = min(
+            settings.pdf_job_timeout_seconds,
+            max(1, settings.worker_job_timeout_seconds - 5),
+        )
+        return await asyncio.to_thread(
+            run_in_process,
+            convert_pdf_with_markitdown,
+            timeout_seconds=timeout_seconds,
+            kwargs={
+                "file_path": document.file_path,
+                "max_file_bytes": settings.pdf_max_file_bytes,
+                "max_pages": settings.pdf_max_pages,
+            },
+        )
+
+    async def _run_pdf_processing(
+        self,
+        document: Document,
+        *,
+        force_pdf_ocr: bool = False,
+    ) -> PDFProcessingResult:
         # Leave a small margin so the outer QueueWorker timeout never abandons a
         # still-running child process.  The child is forcibly terminated on expiry.
         timeout_seconds = min(
@@ -621,6 +659,7 @@ class DocumentIngestionService:
                 "image_max_count": settings.pdf_image_max_count,
                 "enable_image_ocr": settings.pdf_image_ocr_enabled,
                 "image_ocr_max_count": settings.pdf_image_ocr_max_count,
+                "force_pdf_ocr": force_pdf_ocr,
             },
         )
 

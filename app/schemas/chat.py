@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.constants import ChatType, RetrievalScope, RiskLevel
+from app.core.constants import ChatType, RetrievalScope, RiskLevel, ThinkingMode
 
 
 class ChatQueryRequest(BaseModel):
@@ -16,6 +16,8 @@ class ChatQueryRequest(BaseModel):
     use_rerank: bool = True
     use_masking: bool = True
     use_tools: bool = False
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
 
     @model_validator(mode="after")
     def validate_retrieval_scope(self):

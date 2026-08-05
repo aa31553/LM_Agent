@@ -36,8 +36,9 @@ unlicensed service identity. Desktop Office automation can display policy or sig
 production deployments must monitor timeouts and validate representative protected files with
 the exact worker identity before accepting traffic.
 
-PDFs and images use the same normalization boundary. Scanned PDFs and direct image uploads
-keep the existing local OCR fallback, then write the OCR result into the generated Markdown.
+PDFs and images use the same normalization boundary. Text-based PDFs go directly through
+MarkItDown without `pypdf` text extraction. When MarkItDown produces no text, scanned PDFs
+keep the existing local OCR fallback; direct image uploads retain their OCR flow as well.
 The LLM receives Markdown-derived context only, never the uploaded binary.
 
 ## Upload Example

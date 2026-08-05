@@ -123,8 +123,9 @@ Response 中的 `items` 是唯一格式清單來源，前端使用 `accept` 設�
 `app/services/text_document_parser_service.py` 處理。
 
 PDF 上傳僅建立文件與處理工作；需要獨立啟動
-`python -m app.workers.document_tasks`。PDF 處理不在 FastAPI/Uvicorn 行程內執行，並預設
-限制檔案為 50 MB、200 頁、單頁 20 秒、整體 10 分鐘。只有無可擷取文字的 PDF 才會整份
+`python -m app.workers.document_tasks`。一般 PDF 由 MarkItDown 直接轉成 Markdown；PDF 處理
+不在 FastAPI/Uvicorn 行程內執行，並預設限制檔案為 50 MB、200 頁、整體 10 分鐘。
+只有 MarkItDown 無法產生文字的 PDF 才會進入既有流程並做整份
 OCR；PDF 圖片擷取與圖片 OCR 預設關閉，可由 `PDF_IMAGE_*` 環境設定開啟並限制數量。
 
 DOCX／XLSX／PPTX 由 Windows worker 先以 pywin32 呼叫 Word／Excel／PowerPoint

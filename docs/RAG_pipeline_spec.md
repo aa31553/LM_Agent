@@ -59,13 +59,14 @@ API stores upload and creates a queue job
   ↓
 Independent document worker starts a killable PDF subprocess
   ↓
-Extract Metadata
+Check file and page limits without pypdf
   ↓
-Check Text Extractability
+Convert PDF directly with MarkItDown
   ↓
-If text-based PDF:
-      Extract Text by Page
-  Else:
+If MarkItDown returns text:
+      Continue with generated Markdown
+  Else (scanned/OCR-required PDF):
+      Enter the existing bounded PDF fallback
       Convert Page to Image
       Run OCR
   ↓
@@ -82,11 +83,11 @@ Embed Chunks
 Store Chunks and Vectors
 ```
 
-The default PDF boundary is 50 MB, 200 pages, a 20-second per-page extraction check, and a
-10-minute whole-job timeout. Any limit failure marks both the document and its processing job
-as `failed`. Embedded-image extraction and embedded-image OCR are disabled by default; when
-enabled, their page/image limits are configured independently. Text extraction and optional
-embedded-image extraction share one `PdfReader` pass.
+The default PDF boundary is 50 MB, 200 pages, and a 10-minute whole-job timeout. Any limit
+failure marks both the document and its processing job as `failed`. Normal text-based PDFs are
+not opened with `pypdf`; MarkItDown produces the Markdown directly. The existing bounded
+`pypdf`/page-render/OCR path is used only when MarkItDown produces no text. Embedded-image
+extraction and embedded-image OCR are disabled by default and apply only to that fallback.
 
 ---
 

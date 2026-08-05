@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import ChatType, ErrorCode, MessageRole, RiskLevel
+from app.core.constants import ChatType, ErrorCode, MessageRole, RiskLevel, ThinkingMode
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.models.document import Document
@@ -36,7 +36,13 @@ logger = logging.getLogger(__name__)
 
 
 class RAGService:
-    def __init__(self, db: Session | None = None) -> None:
+    def __init__(
+        self,
+        db: Session | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
         self.masking_service = MaskingService(db)
         self.prompt_injection_detector = PromptInjectionDetector()
@@ -44,7 +50,7 @@ class RAGService:
         self.retriever = HybridRetriever(db=db)
         self.context_builder = ContextBuilder()
         self.prompt_builder = PromptBuilder()
-        self.llm_service = LLMService()
+        self.llm_service = LLMService(model=model, thinking_mode=thinking_mode)
         self.agent_tool_service = AgentToolService(db=db, llm_service=self.llm_service)
         self.citation_builder = CitationBuilder()
         self.audit_service = AuditService(db)

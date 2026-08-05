@@ -52,9 +52,10 @@ Purview/AIP/RMS 加密文件的開啟及另存權限。以相同帳號執行：
 只有出現 `OFFICE_COM_OK` 才代表該帳號可完成實際 Office 開啟與暫存 OpenXML
 輸出；單純成功 `import win32com` 並不足以驗證企業加密權限。
 
-API 行程只負責上傳、建立處理工作與查詢狀態。PDF 的 `pypdf`、OCR 與可選的
+API 行程只負責上傳、建立處理工作與查詢狀態。一般 PDF 由 MarkItDown 直接轉成
+Markdown；只有 MarkItDown 無法取得文字、需要 OCR 時，才進入既有 `pypdf`、OCR 與可選的
 內嵌圖片處理不會在 Uvicorn 內執行。預設限制為 50 MB、200 頁、單頁 20 秒與整體
-10 分鐘；超限時文件與處理工作會標為 `failed`。只有沒有可擷取文字的 PDF 會做整份
+10 分鐘；超限時文件與處理工作會標為 `failed`。只有 MarkItDown 沒有產生文字的 PDF 會做整份
 OCR；內嵌圖片擷取／圖片 OCR 預設關閉，可由 `PDF_IMAGE_*` 設定開啟與限制數量。
 
 ## 2. 驗證與使用者身分

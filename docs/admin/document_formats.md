@@ -4,7 +4,7 @@
 
 | Category | Extensions | Processing path |
 | --- | --- | --- |
-| PDF | `.pdf` | Isolated `pypdf` text extraction; full OCR only when no text is found. Embedded image extraction/OCR is opt-in and bounded. |
+| PDF | `.pdf` | Isolated MarkItDown conversion; the existing bounded `pypdf`/full-OCR path runs only when MarkItDown produces no text. Embedded image extraction/OCR remains opt-in on the OCR fallback. |
 | Image | `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.bmp`, `.webp` | Pillow + local OCR |
 | Office OpenXML | `.docx`, `.xlsx`, `.pptx` | Windows Office COM read-only open/save → temporary OpenXML → MarkItDown + local parser |
 | Text | `.txt`, `.md`, `.markdown`, `.log` | Encoding-aware local parser |
