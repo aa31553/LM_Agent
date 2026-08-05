@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from app.core.constants import RiskLevel
+from app.core.constants import RiskLevel, ThinkingMode
 
 
 class RetentionPolicyRequest(BaseModel):
@@ -37,11 +37,15 @@ class LLMTestRequest(BaseModel):
         max_length=4_000,
     )
     message: str = Field(min_length=1, max_length=20_000)
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
 
 
 class LLMTestResponse(BaseModel):
     status: str
+    selected_model: str
     model: str
+    thinking_mode: ThinkingMode
     endpoint: str
     latency_ms: float
     answer: str

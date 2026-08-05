@@ -8,6 +8,7 @@ from app.core.exceptions import APIError
 @dataclass(frozen=True)
 class ResolvedLLMRoute:
     selection: str
+    thinking_mode: str
     base_url: str
     api_path: str
     api_key: str
@@ -53,6 +54,7 @@ class LLMRoutingService:
         )
         return ResolvedLLMRoute(
             selection=selection or settings.llm_model,
+            thinking_mode=thinking_mode.value,
             base_url=settings.llm_base_url,
             api_path=settings.llm_api_path,
             api_key=settings.llm_api_key,
@@ -79,6 +81,7 @@ class LLMRoutingService:
         )
         return ResolvedLLMRoute(
             selection=selection,
+            thinking_mode=thinking_mode.value,
             base_url=route.base_url,
             api_path=route.api_path,
             api_key=route.api_key,

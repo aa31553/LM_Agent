@@ -26,10 +26,10 @@ from app.schemas.admin import (
     SensitiveRuleStatusRequest,
 )
 from app.services.embedding_service import EmbeddingService
+from app.services.llm_service import LLMService
 from app.services.operation_monitoring_service import OperationMonitoringService
 from app.services.retention_service import RetentionService
 from app.services.sensitive_dictionary_service import SensitiveDictionaryService
-from app.services.llm_service import LLMService
 
 router = APIRouter()
 
@@ -49,15 +49,21 @@ async def test_llm_connection(
 
     _ensure_admin(principal)
     started_at = time.perf_counter()
-    answer = await LLMService().complete(
+    service = LLMService(
+        model=payload.model,
+        thinking_mode=payload.thinking_mode,
+    )
+    answer = await service.complete(
         system_prompt=payload.system_prompt,
         user_prompt=payload.message,
         image_paths=[],
     )
     return LLMTestResponse(
         status="ok",
-        model=settings.llm_model,
-        endpoint=build_api_url(settings.llm_base_url, settings.llm_api_path),
+        selected_model=service.route.selection,
+        model=service.route.model,
+        thinking_mode=service.route.thinking_mode,
+        endpoint=build_api_url(service.route.base_url, service.route.api_path),
         latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
         answer=answer,
     )

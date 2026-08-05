@@ -1,11 +1,17 @@
-# Chat LLM model routing
+# External LLM model routing
 
-The four chat endpoints accept the same optional LLM selection fields:
+All request-driven external generative LLM paths use the same server-side route allowlist.
+JSON request bodies accept optional `model` and `thinking_mode` fields on:
 
 - `POST /api/v1/chat/query`
 - `POST /api/v1/chat/stream`
 - `POST /api/v1/code-chat/query`
 - `POST /api/v1/code-chat/stream`
+- `POST /api/v1/analysis/plan-drafts`
+- `POST /api/v1/analysis/intent-drafts`
+- `POST /api/v1/analysis/jobs/{job_id}/explain`
+- `POST /api/v1/analysis/hybrid-answer`
+- `POST /api/v1/admin/llm/test`
 
 ```json
 {
@@ -19,6 +25,18 @@ The four chat endpoints accept the same optional LLM selection fields:
 `default`, `none`, `low`, `medium`, or `high`. Omitting both fields preserves the existing
 single-model behavior. `default` uses the selected route's configured `reasoning_effort`,
 while `none` omits `reasoning_effort` from the upstream request.
+
+The LLMWiki endpoints use query parameters because search is a `GET` request:
+
+```http
+GET /api/v1/llmwiki/search?knowledge_base_ids=<UUID>&q=topic&model=reasoning&thinking_mode=high
+POST /api/v1/llmwiki/topics/topic/compile?knowledge_base_ids=<UUID>&model=reasoning&thinking_mode=high
+```
+
+The LLMWiki topic-review CLI accepts the equivalent `--model` and `--thinking-mode` options.
+Admin test responses report the resolved route key, upstream model, thinking mode, and endpoint.
+`GET /api/v1/health/dependencies` reports every configured route without exposing credentials.
+Chat LLM audit logs store the actual resolved upstream model instead of the legacy global model.
 
 Configure model choices with the `LLM_MODEL_ROUTES` JSON environment variable. Each key is
 an allowed frontend selection and routes to its own OpenAI-compatible base URL, API path,

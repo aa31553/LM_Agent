@@ -13,6 +13,7 @@ from app.core.constants import (
     AnalysisPlanDraftStatus,
     ErrorCode,
     PermissionLevel,
+    ThinkingMode,
 )
 from app.core.exceptions import APIError
 from app.core.security import Principal
@@ -39,9 +40,19 @@ from app.services.workspace_service import WorkspaceService
 class AnalysisOrchestratorService:
     """Turn natural language into a validated draft; never execute it implicitly."""
 
-    def __init__(self, db: Session, llm_service: LLMService | None = None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        llm_service: LLMService | None = None,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
-        self.llm_service = llm_service or LLMService()
+        self.llm_service = llm_service or LLMService(
+            model=model,
+            thinking_mode=thinking_mode,
+        )
         self.jobs = AnalysisJobService(db)
         self.normalizer = AnalysisPlanNormalizer()
         self.repair_service = AnalysisPlanRepairService(self.llm_service)
@@ -230,6 +241,15 @@ class AnalysisOrchestratorService:
                 "file_ids": [str(item) for item in payload.file_ids],
                 "repair_attempted": repair_attempted,
             }
+            route = getattr(self.llm_service, "route", None)
+            if route is not None:
+                audit_metadata.update(
+                    {
+                        "llm_route": route.selection,
+                        "llm_model": route.model,
+                        "thinking_mode": route.thinking_mode,
+                    }
+                )
             audit.record_event(
                 "analysis_intent_created",
                 "A high-level analysis intent draft was created.",

@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.constants import ThinkingMode
 from app.core.security import Principal, get_current_principal
 from app.db.session import get_db
 from app.schemas.llmwiki import (
@@ -33,10 +34,16 @@ async def search_topics(
     knowledge_base_ids: KnowledgeBaseIds,
     q: str = Query(default="", description="Topic or natural-language search text."),
     limit: int = Query(default=10, ge=1, le=50),
+    model: str | None = Query(default=None, min_length=1, max_length=128),
+    thinking_mode: ThinkingMode = Query(default=ThinkingMode.DEFAULT),
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> LLMWikiSearchResponse:
-    items = await LLMWikiService(db).search_topics_reviewed(
+    items = await LLMWikiService(
+        db,
+        model=model,
+        thinking_mode=thinking_mode,
+    ).search_topics_reviewed(
         query=q,
         knowledge_base_ids=knowledge_base_ids,
         limit=limit,
@@ -70,10 +77,16 @@ async def compile_topic_page(
     knowledge_base_ids: KnowledgeBaseIds,
     top_k: int = Query(default=24, ge=1, le=80),
     include_graph: bool = Query(default=True),
+    model: str | None = Query(default=None, min_length=1, max_length=128),
+    thinking_mode: ThinkingMode = Query(default=ThinkingMode.DEFAULT),
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> LLMWikiCompileResponse:
-    page, operation = await LLMWikiService(db).compile_topic_reviewed(
+    page, operation = await LLMWikiService(
+        db,
+        model=model,
+        thinking_mode=thinking_mode,
+    ).compile_topic_reviewed(
         topic=topic,
         knowledge_base_ids=knowledge_base_ids,
         top_k=top_k,

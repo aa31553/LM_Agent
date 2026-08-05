@@ -15,6 +15,7 @@ from app.core.constants import (
     ConfidentialLevel,
     ErrorCode,
     PermissionLevel,
+    ThinkingMode,
 )
 from app.core.exceptions import APIError
 from app.core.security import Principal, get_current_principal
@@ -25,6 +26,7 @@ from app.models.workspace import AnalysisArtifact
 from app.schemas.analysis import (
     AnalysisArtifactCreatedResponse,
     AnalysisChartArtifactRequest,
+    AnalysisExplanationRequest,
     AnalysisExplanationResponse,
     AnalysisExportRequest,
     AnalysisFileItem,
@@ -552,7 +554,11 @@ async def create_analysis_plan_draft(
     db: Session = Depends(get_db),
 ) -> AnalysisPlanDraftResponse:
     reset_llm_token_usage()
-    service = AnalysisOrchestratorService(db)
+    service = AnalysisOrchestratorService(
+        db,
+        model=payload.model,
+        thinking_mode=payload.thinking_mode,
+    )
     async with chat_runtime_service.request_slot():
         draft = await service.create_draft(payload, principal)
     raw_usage = get_llm_token_usage()
@@ -676,6 +682,7 @@ def retry_analysis_job(
 )
 async def explain_analysis_job(
     job_id: UUID,
+    payload: AnalysisExplanationRequest | None = None,
     principal: Principal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> AnalysisExplanationResponse:
@@ -683,7 +690,13 @@ async def explain_analysis_job(
     job = service.get(job_id, principal)
     reset_llm_token_usage()
     async with chat_runtime_service.request_slot():
-        answer = await service.explain(job)
+        answer = await service.explain(
+            job,
+            model=payload.model if payload is not None else None,
+            thinking_mode=(
+                payload.thinking_mode if payload is not None else ThinkingMode.DEFAULT
+            ),
+        )
     raw_usage = get_llm_token_usage()
     return AnalysisExplanationResponse(
         job_id=job.id,
@@ -707,7 +720,11 @@ async def hybrid_analysis_answer(
 ) -> AnalysisHybridResponse:
     reset_llm_token_usage()
     async with chat_runtime_service.request_slot():
-        answer, citations, report = await HybridAnalysisService(db).answer(
+        answer, citations, report = await HybridAnalysisService(
+            db,
+            model=payload.model,
+            thinking_mode=payload.thinking_mode,
+        ).answer(
             payload,
             principal,
         )

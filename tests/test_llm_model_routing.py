@@ -1,4 +1,5 @@
 import json
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -7,14 +8,26 @@ from pydantic import ValidationError
 
 from app.api.v1.chat import _rag_service
 from app.api.v1.code_chat import _code_chat_service
+from app.api.v1.health import _check_llm_service
 from app.core.config import LLMModelRouteSettings, Settings, settings
 from app.core.constants import ConfidentialLevel, ErrorCode, ThinkingMode
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.integrations.openai_compatible_client import OpenAICompatibleClient
 from app.main import create_app
+from app.schemas.admin import LLMTestRequest
+from app.schemas.analysis import (
+    AnalysisExplanationRequest,
+    AnalysisHybridRequest,
+    AnalysisPlanDraftCreate,
+)
 from app.schemas.chat import ChatQueryRequest, CodeChatRequest
+from app.services.analysis_orchestrator_service import AnalysisOrchestratorService
+from app.services.audit_service import AuditService
+from app.services.hybrid_analysis_service import HybridAnalysisService
 from app.services.llm_routing_service import LLMRoutingService
+from app.services.llmwiki_service import LLMWikiService
+from app.services.rag_service import RAGService
 
 
 @pytest.fixture
@@ -90,6 +103,110 @@ def test_all_chat_query_and_stream_endpoints_use_routable_request_models() -> No
         "/api/v1/code-chat/stream",
     ):
         assert "requestBody" in openapi["paths"][path]["post"]
+
+
+def test_analysis_admin_and_llmwiki_contracts_publish_route_selection() -> None:
+    workspace_id = uuid4()
+    file_id = uuid4()
+    job_id = uuid4()
+    draft = AnalysisPlanDraftCreate(
+        workspace_id=workspace_id,
+        question="Summarize the data",
+        file_ids=[file_id],
+        model="reasoning",
+        thinking_mode="high",
+    )
+    hybrid = AnalysisHybridRequest(
+        workspace_id=workspace_id,
+        question="Explain the result",
+        analysis_job_ids=[job_id],
+        model="reasoning",
+        thinking_mode="medium",
+    )
+    explanation = AnalysisExplanationRequest(model="general", thinking_mode="none")
+    admin = LLMTestRequest(message="test", model="reasoning", thinking_mode="low")
+
+    assert draft.thinking_mode == ThinkingMode.HIGH
+    assert hybrid.thinking_mode == ThinkingMode.MEDIUM
+    assert explanation.thinking_mode == ThinkingMode.NONE
+    assert admin.thinking_mode == ThinkingMode.LOW
+
+    openapi = TestClient(create_app()).app.openapi()
+    schemas = openapi["components"]["schemas"]
+    for schema_name in (
+        "AnalysisPlanDraftCreate",
+        "AnalysisHybridRequest",
+        "AnalysisExplanationRequest",
+        "LLMTestRequest",
+    ):
+        assert {"model", "thinking_mode"} <= set(schemas[schema_name]["properties"])
+
+    search_parameters = openapi["paths"]["/api/v1/llmwiki/search"]["get"]["parameters"]
+    compile_parameters = openapi["paths"][
+        "/api/v1/llmwiki/topics/{topic}/compile"
+    ]["post"]["parameters"]
+    assert {"model", "thinking_mode"} <= {item["name"] for item in search_parameters}
+    assert {"model", "thinking_mode"} <= {item["name"] for item in compile_parameters}
+    assert "requestBody" in openapi["paths"][
+        "/api/v1/analysis/jobs/{job_id}/explain"
+    ]["post"]
+
+
+def test_internal_llm_paths_and_audit_use_the_resolved_route(configured_routes) -> None:
+    orchestrator = AnalysisOrchestratorService(
+        None,
+        model="reasoning",
+        thinking_mode=ThinkingMode.HIGH,
+    )
+    hybrid = HybridAnalysisService(
+        None,
+        model="reasoning",
+        thinking_mode=ThinkingMode.MEDIUM,
+    )
+    llmwiki = LLMWikiService(
+        None,
+        model="reasoning",
+        thinking_mode=ThinkingMode.LOW,
+    )
+    rag = RAGService(
+        None,
+        model="reasoning",
+        thinking_mode=ThinkingMode.HIGH,
+    )
+
+    assert orchestrator.llm_service.route.thinking_mode == "high"
+    assert hybrid.llm.route.thinking_mode == "medium"
+    assert llmwiki.llm_service.route.thinking_mode == "low"
+    assert rag.audit_service.model_name == "company/reasoning-32b"
+    assert AuditService(model_name=rag.llm_service.route.model).model_name == (
+        "company/reasoning-32b"
+    )
+
+    class FakeDB:
+        def add(self, value):
+            self.value = value
+
+    fake_db = FakeDB()
+    audit = AuditService(
+        fake_db,
+        model_name=rag.llm_service.route.model,
+        model_route=rag.llm_service.route.selection,
+        thinking_mode=rag.llm_service.route.thinking_mode,
+    )
+    event = audit.record_event("query_executed", "done", {})
+    assert event.event_metadata == {
+        "llm_model": "company/reasoning-32b",
+        "llm_route": "reasoning",
+        "thinking_mode": "high",
+    }
+
+
+def test_health_reports_all_allowlisted_routes(configured_routes) -> None:
+    status = _check_llm_service()
+
+    assert status["selected_model"] == "general"
+    assert status["available_models"] == ["general", "reasoning"]
+    assert status["routes"]["reasoning"]["model"] == "company/reasoning-32b"
 
 
 def test_chat_and_code_endpoint_factories_forward_the_selected_route(configured_routes) -> None:

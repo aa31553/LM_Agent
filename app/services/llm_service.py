@@ -18,6 +18,12 @@ class LLMService:
             thinking_mode=thinking_mode,
         )
 
+    @property
+    def route(self):
+        """Return the resolved server-side route used by this service."""
+
+        return self.client.route
+
     async def complete(
         self,
         system_prompt: str,

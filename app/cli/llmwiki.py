@@ -2,7 +2,7 @@ import argparse
 import asyncio
 from uuid import UUID
 
-from app.core.constants import ConfidentialLevel
+from app.core.constants import ConfidentialLevel, ThinkingMode
 from app.core.security import Principal
 from app.db.session import SessionLocal
 from app.services.llmwiki_service import LLMWikiService
@@ -29,7 +29,11 @@ def reset_main() -> None:
 
 async def _discover(args: argparse.Namespace) -> None:
     with SessionLocal() as db:
-        items = await LLMWikiService(db).discover_and_review_topics(
+        items = await LLMWikiService(
+            db,
+            model=args.model,
+            thinking_mode=args.thinking_mode,
+        ).discover_and_review_topics(
             knowledge_base_id=args.knowledge_base_id,
             limit=args.limit,
             principal=_admin_principal(),
@@ -45,5 +49,12 @@ def discover_main() -> None:
     parser.add_argument("--knowledge-base-id", required=True, type=UUID)
     parser.add_argument("--limit", default=20, type=int)
     parser.add_argument("--query", default="")
+    parser.add_argument("--model", default=None)
+    parser.add_argument(
+        "--thinking-mode",
+        default=ThinkingMode.DEFAULT,
+        type=ThinkingMode,
+        choices=list(ThinkingMode),
+    )
     args = parser.parse_args()
     asyncio.run(_discover(args))

@@ -53,7 +53,12 @@ class RAGService:
         self.llm_service = LLMService(model=model, thinking_mode=thinking_mode)
         self.agent_tool_service = AgentToolService(db=db, llm_service=self.llm_service)
         self.citation_builder = CitationBuilder()
-        self.audit_service = AuditService(db)
+        self.audit_service = AuditService(
+            db,
+            model_name=self.llm_service.route.model,
+            model_route=self.llm_service.route.selection,
+            thinking_mode=self.llm_service.route.thinking_mode,
+        )
         self.chat_history_service = ChatHistoryService(
             self.masking_service,
             max_turns=settings.chat_history_max_turns,

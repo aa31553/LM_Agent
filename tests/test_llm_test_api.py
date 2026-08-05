@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import LLMModelRouteSettings, settings
 from app.core.constants import ErrorCode
 from app.core.exceptions import APIError
 from app.main import create_app
@@ -98,3 +99,38 @@ def test_admin_llm_test_returns_upstream_api_error(monkeypatch) -> None:
     assert response.status_code == 502
     assert response.json()["error_code"] == "LLM_SERVICE_ERROR"
     assert response.json()["details"] == {"status_code": 401}
+
+
+def test_admin_llm_test_returns_the_resolved_model_route(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings,
+        "llm_model_routes",
+        {
+            "reasoning": LLMModelRouteSettings(
+                base_url="https://reasoning.internal/gateway",
+                model="company/reasoning-32b",
+                reasoning_effort="medium",
+            )
+        },
+    )
+
+    async def fake_complete(self, system_prompt, user_prompt, image_paths=None):
+        return "ok"
+
+    monkeypatch.setattr(LLMService, "complete", fake_complete)
+    response = TestClient(create_app()).post(
+        "/api/v1/admin/llm/test",
+        headers=_admin_headers(),
+        json={"message": "test", "model": "reasoning", "thinking_mode": "high"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "selected_model": "reasoning",
+        "model": "company/reasoning-32b",
+        "thinking_mode": "high",
+        "endpoint": "https://reasoning.internal/gateway/v1/chat/completions",
+        "latency_ms": response.json()["latency_ms"],
+        "answer": "ok",
+    }

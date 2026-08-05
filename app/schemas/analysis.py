@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.core.constants import AnalysisJobStatus, AnalysisPlanDraftStatus
+from app.core.constants import AnalysisJobStatus, AnalysisPlanDraftStatus, ThinkingMode
 from app.schemas.chat import Citation, LLMUsage
 
 Scalar = str | int | float | bool | date | datetime | None
@@ -322,7 +322,12 @@ class AnalysisExplanationResponse(BaseModel):
     usage: LLMUsage = Field(default_factory=LLMUsage)
 
 
-class AnalysisPlanDraftCreate(BaseModel):
+class AnalysisLLMRouteSelection(BaseModel):
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    thinking_mode: ThinkingMode = ThinkingMode.DEFAULT
+
+
+class AnalysisPlanDraftCreate(AnalysisLLMRouteSelection):
     workspace_id: UUID
     question: str = Field(min_length=2, max_length=4000)
     file_ids: list[UUID] = Field(min_length=1, max_length=8)
@@ -365,7 +370,11 @@ class AnalysisPlanDraftConfirmRequest(BaseModel):
     clarification_choice: str | None = Field(default=None, min_length=1, max_length=32)
 
 
-class AnalysisHybridRequest(BaseModel):
+class AnalysisExplanationRequest(AnalysisLLMRouteSelection):
+    pass
+
+
+class AnalysisHybridRequest(AnalysisLLMRouteSelection):
     workspace_id: UUID
     question: str = Field(min_length=2, max_length=4000)
     analysis_job_ids: list[UUID] = Field(min_length=1, max_length=10)

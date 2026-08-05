@@ -349,6 +349,10 @@ GET /api/v1/llmwiki/lint?knowledge_base_ids=<KB_UUID>
 GET /api/v1/llmwiki/operations?limit=20
 ```
 
+`search` 與 `compile` 可額外傳入 `model=<route_key>` 及
+`thinking_mode=default|none|low|medium|high`。實際 URL、金鑰與 upstream model
+仍由後端 `LLM_MODEL_ROUTES` allowlist 管理。
+
 `GET /api/v1/llmwiki/demo` 不需登入，只回傳內建展示資料。
 
 ### 4.7 管理員檢查
@@ -362,7 +366,9 @@ GET  /api/v1/admin/operations/metrics
 POST /api/v1/admin/retention
 ```
 
-LLM 測試不啟動 RAG、LLMWiki 或資料庫 Session，適合單獨確認 OpenAI-compatible LLM 連線。
+LLM 測試 request body 可傳入 `model` 與 `thinking_mode`，且不啟動 RAG、LLMWiki
+或資料庫 Session，適合單獨確認指定 OpenAI-compatible LLM 路由。分析的 plan/intent draft、
+job explain 與 hybrid-answer 也使用相同欄位；未傳入時維持預設路由。
 
 ## 5. API 群組
 

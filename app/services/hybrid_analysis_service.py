@@ -3,7 +3,7 @@ import json
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.constants import AnalysisJobStatus, ErrorCode, PermissionLevel
+from app.core.constants import AnalysisJobStatus, ErrorCode, PermissionLevel, ThinkingMode
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.rag.citation_builder import CitationBuilder
@@ -20,11 +20,17 @@ from app.services.workspace_service import WorkspaceService
 class HybridAnalysisService:
     """Compose computed spreadsheet facts with authorized KB evidence."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> None:
         self.db = db
         self.jobs = AnalysisJobService(db)
         self.retriever = HybridRetriever(db=db)
-        self.llm = LLMService()
+        self.llm = LLMService(model=model, thinking_mode=thinking_mode)
         self.masking = MaskingService(db)
 
     async def answer(

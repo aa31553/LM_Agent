@@ -13,6 +13,7 @@ from app.core.constants import (
     ConfidentialLevel,
     ErrorCode,
     PermissionLevel,
+    ThinkingMode,
 )
 from app.core.exceptions import APIError
 from app.core.security import Principal
@@ -400,7 +401,13 @@ class AnalysisJobService:
             finished_at=job.finished_at,
         )
 
-    async def explain(self, job: AnalysisJob) -> str:
+    async def explain(
+        self,
+        job: AnalysisJob,
+        *,
+        model: str | None = None,
+        thinking_mode: ThinkingMode = ThinkingMode.DEFAULT,
+    ) -> str:
         if job.status != AnalysisJobStatus.COMPLETED.value or job.result_json is None:
             raise APIError(
                 ErrorCode.INVALID_REQUEST,
@@ -429,7 +436,10 @@ class AnalysisJobService:
                 400,
             )
         user_prompt = f"result_json:\n{result_dlp.text}"
-        answer = await LLMService().complete(
+        answer = await LLMService(
+            model=model,
+            thinking_mode=thinking_mode,
+        ).complete(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
         )

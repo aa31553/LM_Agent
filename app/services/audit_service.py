@@ -30,8 +30,18 @@ logger = logging.getLogger(__name__)
 
 
 class AuditService:
-    def __init__(self, db: Session | None = None) -> None:
+    def __init__(
+        self,
+        db: Session | None = None,
+        *,
+        model_name: str | None = None,
+        model_route: str | None = None,
+        thinking_mode: str | None = None,
+    ) -> None:
         self.db = db
+        self.model_name = model_name or settings.llm_model
+        self.model_route = model_route
+        self.thinking_mode = thinking_mode
 
     def record_event(
         self,
@@ -44,12 +54,21 @@ class AuditService:
         target_id: UUID | None = None,
         risk_level: RiskLevel | str | None = None,
     ) -> AuditEvent | None:
+        event_metadata = dict(metadata or {})
+        if event_type in {"llm_call_failed", "query_executed"}:
+            event_metadata.update(
+                {
+                    "llm_model": self.model_name,
+                    "llm_route": self.model_route or self.model_name,
+                    "thinking_mode": self.thinking_mode or "default",
+                }
+            )
         logger.info(
             "audit_event",
             extra={
                 "event_type": event_type,
                 "audit_message": message,
-                "audit_metadata": metadata or {},
+                "audit_metadata": event_metadata,
             },
         )
         if self.db is None:
@@ -61,7 +80,7 @@ class AuditService:
             target_id=target_id,
             risk_level=str(risk_level) if risk_level is not None else None,
             message=message,
-            event_metadata=metadata or {},
+            event_metadata=event_metadata,
         )
         self.db.add(event)
         return event
@@ -375,7 +394,7 @@ class AuditService:
         self.db.add(
             LLMCallLog(
                 message_id=message_id,
-                model_name=settings.llm_model,
+                model_name=self.model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
