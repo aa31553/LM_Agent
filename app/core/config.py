@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     code_context_max_chars: int = Field(default=60000, ge=1000)
     agent_tool_prompt_reserve_tokens: int = Field(default=4096, ge=0)
     agent_tool_context_max_chars: int = Field(default=12000, ge=1000)
+    agent_runtime: str = Field(default="legacy", pattern="^(legacy|pydantic_ai)$")
+    agent_runtime_retries: int = Field(default=1, ge=0, le=3)
+    agent_structured_output: bool = False
 
     retrieval_top_k: int = 20
     rerank_top_n: int = 8

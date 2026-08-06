@@ -4,16 +4,10 @@ from copy import deepcopy
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.analysis_recipe import AnalysisClarification, IntentDraft
-from app.services.analysis_intent_semantic_service import AnalysisIntentSemanticService
-from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
-from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
-from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
-from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
-from app.services.dataset_query_service import DatasetQueryService
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from app.agent_runtime.analysis_intent import PydanticAIAnalysisIntentService
 from app.core.config import settings
 from app.core.constants import (
     AnalysisFileStatus,
@@ -31,9 +25,16 @@ from app.schemas.analysis import (
     AnalysisPlanDraftCreate,
     AnalysisPlanDraftResponse,
 )
+from app.schemas.analysis_recipe import AnalysisClarification, IntentDraft
 from app.services.agent_tool_service import AgentToolService
+from app.services.analysis_intent_semantic_service import AnalysisIntentSemanticService
 from app.services.analysis_job_service import AnalysisJobService
+from app.services.analysis_plan_normalizer import AnalysisPlanNormalizer
+from app.services.analysis_plan_repair_service import AnalysisPlanRepairService
+from app.services.analysis_recipe_compiler import AnalysisRecipeCompiler
+from app.services.analysis_recipe_registry import AnalysisRecipeRegistry
 from app.services.audit_service import AuditService
+from app.services.dataset_query_service import DatasetQueryService
 from app.services.llm_service import LLMService
 from app.services.workspace_service import WorkspaceService
 
@@ -111,7 +112,38 @@ class AnalysisOrchestratorService:
             question=payload.question,
             schema_context=schema_context,
         )
-        if payload.use_tools:
+        default_source = None
+        if len(sources) == 1:
+            dataset = sources[0].dataset_manifest["datasets"][0]
+            default_source = {
+                "file_id": str(sources[0].id),
+                "alias": "data",
+                "sheet": dataset.get("sheet"),
+            }
+        allowed_file_ids = {str(source.id) for source in sources}
+        manifests = {str(source.id): source.dataset_manifest for source in sources}
+
+        if settings.agent_runtime == "pydantic_ai" and settings.analysis_intent_flow_enabled:
+            intent_prompt = user_prompt
+            if default_source is not None:
+                intent_prompt += (
+                    "\n只有一個資料來源時，請在 sources 使用以下來源，不要省略："
+                    + json.dumps(default_source, ensure_ascii=False)
+                )
+            intent = await PydanticAIAnalysisIntentService(
+                self.llm_service,
+                compiler=self.recipe_compiler,
+                semantic_service=self.semantic_service,
+                retries=settings.agent_runtime_retries,
+            ).generate(
+                system_prompt=system_prompt,
+                user_prompt=intent_prompt,
+                question=payload.question,
+                manifests=manifests,
+                allowed_file_ids=allowed_file_ids,
+            )
+            plan_payload = intent.model_dump(mode="json")
+        elif payload.use_tools:
             system_prompt += (
                 " 你可以使用 workspace tools 先列出工作區文件，再按需要分段讀取；"
                 "只讀取完成此分析計畫所需的內容。"
@@ -130,23 +162,14 @@ class AnalysisOrchestratorService:
                     principal=principal,
                 )
             ).answer
+            plan_payload = self._extract_json(raw)
         else:
             raw = await self.llm_service.complete(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
             )
-        plan_payload = self._extract_json(raw)
+            plan_payload = self._extract_json(raw)
         raw_plan_payload = deepcopy(plan_payload)
-        default_source = None
-        if len(sources) == 1:
-            dataset = sources[0].dataset_manifest["datasets"][0]
-            default_source = {
-                "file_id": str(sources[0].id),
-                "alias": "data",
-                "sheet": dataset.get("sheet"),
-            }
-        allowed_file_ids = {str(source.id) for source in sources}
-        manifests = {str(source.id): source.dataset_manifest for source in sources}
         normalized_intent_payload: dict
         clarification = None
         if settings.analysis_intent_flow_enabled:

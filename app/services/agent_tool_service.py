@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -47,6 +48,31 @@ class AgentToolService:
         self.prompt_budget_service = PromptBudgetService()
 
     async def answer_with_tools(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        knowledge_base_ids: list[UUID],
+        top_k: int,
+        use_rerank: bool,
+        principal: Principal,
+        workspace_id: UUID | None = None,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> AgentAnswer:
+        from app.agent_runtime.factory import create_agent_runtime
+
+        return await create_agent_runtime(self).answer_with_tools(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            knowledge_base_ids=knowledge_base_ids,
+            top_k=top_k,
+            use_rerank=use_rerank,
+            principal=principal,
+            workspace_id=workspace_id,
+            messages=messages,
+        )
+
+    async def _answer_with_tools_legacy(
         self,
         *,
         system_prompt: str,
@@ -147,6 +173,27 @@ class AgentToolService:
             tool_calls=traces,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
+
+    async def stream_answer_with_tools(self, **kwargs) -> AsyncIterator[dict[str, Any]]:
+        """Yield runtime-neutral streaming events for tool-enabled responses."""
+
+        from app.agent_runtime.factory import create_agent_runtime
+
+        runtime = create_agent_runtime(self)
+        stream_method = getattr(runtime, "stream_answer_with_tools", None)
+        if stream_method is None:
+            result = await runtime.answer_with_tools(**kwargs)
+            if result.answer:
+                yield {"event": "delta", "text": result.answer}
+            yield {
+                "event": "complete",
+                "answer": result.answer,
+                "tool_calls": result.tool_calls,
+                "latency_ms": result.latency_ms,
+            }
+            return
+        async for event in stream_method(**kwargs):
+            yield event
 
     async def execute_tool(
         self,

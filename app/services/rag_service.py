@@ -4,17 +4,6 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
-from app.rag.citation_builder import CitationBuilder
-from app.rag.context_builder import ContextBuilder
-from app.rag.prompt_builder import PromptBuilder
-from app.rag.query_processor import QueryProcessor
-from app.rag.retriever import HybridRetriever
-from app.security.prompt_injection_detector import PromptInjectionDetector
-from app.services.chat_history_service import ChatHistoryService, ConversationHistory
-from app.services.chat_response_service import finalize_chat_response
-from app.services.image_context_service import ImageContextService
-from app.services.llmwiki_service import LLMWikiService
-from app.services.skill_service import SkillService
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -30,12 +19,23 @@ from app.core.constants import (
 from app.core.exceptions import APIError
 from app.core.security import Principal
 from app.models.document import Document
+from app.rag.citation_builder import CitationBuilder
+from app.rag.context_builder import ContextBuilder
+from app.rag.prompt_builder import PromptBuilder
+from app.rag.query_processor import QueryProcessor
+from app.rag.retriever import HybridRetriever
 from app.schemas.chat import ChatQueryRequest, ChatQueryResponse
+from app.security.prompt_injection_detector import PromptInjectionDetector
 from app.services.agent_tool_service import AgentToolService
 from app.services.audit_service import AuditService
+from app.services.chat_history_service import ChatHistoryService, ConversationHistory
+from app.services.chat_response_service import finalize_chat_response
+from app.services.image_context_service import ImageContextService
 from app.services.llm_service import LLMService
+from app.services.llmwiki_service import LLMWikiService
 from app.services.masking_service import MaskingService
 from app.services.prompt_budget_service import PromptBudgetService
+from app.services.skill_service import SkillService
 from app.services.vector_store_service import RetrievedChunk
 from app.services.workspace_service import WorkspaceService
 from app.utils.llm_usage import reset_llm_token_usage
@@ -683,16 +683,45 @@ class RAGService:
         tool_traces = []
         if payload.use_tools:
             try:
-                agent_answer = await self.agent_tool_service.answer_with_tools(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    knowledge_base_ids=payload.knowledge_base_ids,
-                    top_k=payload.top_k,
-                    use_rerank=payload.use_rerank,
-                    principal=principal,
-                    workspace_id=effective_workspace_id,
-                    messages=conversation_messages,
-                )
+                if settings.agent_runtime == "pydantic_ai":
+                    agent_answer = None
+                    async for event in self.agent_tool_service.stream_answer_with_tools(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        knowledge_base_ids=payload.knowledge_base_ids,
+                        top_k=payload.top_k,
+                        use_rerank=payload.use_rerank,
+                        principal=principal,
+                        workspace_id=effective_workspace_id,
+                        messages=conversation_messages,
+                    ):
+                        if event["event"] == "delta":
+                            yield event
+                        elif event["event"] == "complete":
+                            agent_answer = event
+                    if agent_answer is None:
+                        raise APIError(
+                            ErrorCode.LLM_SERVICE_ERROR,
+                            "Agent stream ended without a final response.",
+                            502,
+                        )
+                    answer = agent_answer["answer"]
+                    latency_ms = agent_answer["latency_ms"]
+                    tool_traces = agent_answer["tool_calls"]
+                else:
+                    legacy_answer = await self.agent_tool_service.answer_with_tools(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        knowledge_base_ids=payload.knowledge_base_ids,
+                        top_k=payload.top_k,
+                        use_rerank=payload.use_rerank,
+                        principal=principal,
+                        workspace_id=effective_workspace_id,
+                        messages=conversation_messages,
+                    )
+                    answer = legacy_answer.answer
+                    latency_ms = legacy_answer.latency_ms
+                    tool_traces = legacy_answer.tool_calls
             except Exception as exc:
                 self.audit_service.record_completed_llm_call(
                     message_id=user_message.id,
@@ -715,10 +744,7 @@ class RAGService:
                 if self.db is not None:
                     self.db.commit()
                 raise
-            answer = agent_answer.answer
-            latency_ms = agent_answer.latency_ms
-            tool_traces = agent_answer.tool_calls
-            if answer:
+            if settings.agent_runtime != "pydantic_ai" and answer:
                 yield {"event": "delta", "text": answer}
             self.audit_service.record_completed_llm_call(
                 message_id=user_message.id,
