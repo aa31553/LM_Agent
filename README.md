@@ -50,9 +50,15 @@ Install dependencies:
 
 ```bash
 pip install -e .[dev]
+python -m app.scripts.validate_pydantic_ai
 npm ci
 npm run build:frontend
 ```
+
+The compatibility check verifies the pinned PydanticAI 1.107.1 runtime and its
+required OpenAI, Pydantic, graph, retry, and OpenTelemetry packages. If it
+reports a mixed installation after a PydanticAI upgrade or downgrade, follow
+the clean reinstall steps in `docs/pydantic_ai_runtime.md`.
 
 After starting Uvicorn, open `http://127.0.0.1:8000/console/`. The Analysis tab
 compiles versioned analysis chart results with Microsoft Flint and renders them

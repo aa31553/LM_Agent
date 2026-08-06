@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 from pydantic_ai import Agent, ModelRetry, RunContext
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.exceptions import APIError
@@ -76,7 +76,7 @@ class PydanticAIAnalysisIntentService:
                 http_client=http_client,
             )
             agent = Agent(
-                OpenAIModel(route.model, provider=provider),
+                OpenAIChatModel(route.model, provider=provider),
                 deps_type=AnalysisIntentDependencies,
                 output_type=IntentDraft,
                 instructions=system_prompt,

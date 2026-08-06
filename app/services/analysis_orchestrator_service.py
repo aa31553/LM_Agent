@@ -7,7 +7,6 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.agent_runtime.analysis_intent import PydanticAIAnalysisIntentService
 from app.core.config import settings
 from app.core.constants import (
     AnalysisFileStatus,
@@ -124,6 +123,10 @@ class AnalysisOrchestratorService:
         manifests = {str(source.id): source.dataset_manifest for source in sources}
 
         if settings.agent_runtime == "pydantic_ai" and settings.analysis_intent_flow_enabled:
+            # Keep the optional runtime isolated from application startup.  A broken
+            # PydanticAI installation must not prevent the legacy runtime from booting.
+            from app.agent_runtime.analysis_intent import PydanticAIAnalysisIntentService
+
             intent_prompt = user_prompt
             if default_source is not None:
                 intent_prompt += (

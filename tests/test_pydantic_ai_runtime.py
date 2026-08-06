@@ -1,13 +1,20 @@
 import asyncio
+import subprocess
+import sys
+from importlib import metadata
 from types import SimpleNamespace
 
+import httpx
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 
 from app.agent_runtime.outputs import AnswerOutput, to_legacy_answer
 from app.agent_runtime.pydantic_ai_runtime import (
     AgentDependencies,
     PydanticAIAgentRuntime,
+    _usage_payload,
 )
+from app.scripts.validate_pydantic_ai import EXPECTED_VERSION, validate_installation
 
 
 class FakeGateway:
@@ -35,6 +42,36 @@ class FakeGateway:
 
 def _runtime() -> PydanticAIAgentRuntime:
     return PydanticAIAgentRuntime(gateway=FakeGateway())
+
+
+def test_installed_pydantic_ai_matches_runtime_contract() -> None:
+    assert metadata.version("pydantic-ai-slim") == EXPECTED_VERSION
+    assert validate_installation() == []
+
+
+def test_legacy_app_startup_does_not_import_pydantic_ai() -> None:
+    script = """
+import builtins
+original_import = builtins.__import__
+
+def blocked(name, *args, **kwargs):
+    if name.startswith('pydantic_ai'):
+        raise AssertionError(f'unexpected eager import: {name}')
+    return original_import(name, *args, **kwargs)
+
+builtins.__import__ = blocked
+import app.main
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True)
+
+
+async def test_runtime_builds_canonical_openai_chat_model() -> None:
+    runtime = _runtime()
+    async with httpx.AsyncClient(trust_env=False) as http_client:
+        model = runtime._build_model(FakeGateway.llm_service.route, http_client)
+
+    assert isinstance(model, OpenAIChatModel)
+    assert model.model_name == "test"
 
 
 def test_workspace_tools_are_only_registered_for_workspace_requests() -> None:
@@ -82,6 +119,7 @@ def test_typed_agent_can_run_without_calling_external_model() -> None:
     result = asyncio.run(agent.run("hello", deps=deps))
 
     assert result.output == "done"
+    assert _usage_payload(result.usage)["requests"] == 1
 
 
 def test_runtime_answer_contract_can_be_verified_with_pydantic_test_model() -> None:

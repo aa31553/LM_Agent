@@ -22,7 +22,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import UsageLimits
 
@@ -195,14 +195,14 @@ class PydanticAIAgentRuntime:
             "latency_ms": int((time.perf_counter() - started) * 1000),
         }
 
-    def _build_model(self, route, http_client: httpx.AsyncClient) -> OpenAIModel:
+    def _build_model(self, route, http_client: httpx.AsyncClient) -> OpenAIChatModel:
         completion_root = route.api_path.removesuffix("/chat/completions").rstrip("/")
         provider = OpenAIProvider(
             base_url=self._join_url(route.base_url, completion_root),
             api_key=route.api_key or "lm-agent",
             http_client=http_client,
         )
-        return OpenAIModel(route.model, provider=provider)
+        return OpenAIChatModel(route.model, provider=provider)
 
     @staticmethod
     def _model_settings(route) -> dict[str, Any]:
@@ -219,7 +219,7 @@ class PydanticAIAgentRuntime:
     def _build_agent(
         self,
         *,
-        model: OpenAIModel,
+        model: OpenAIChatModel,
         system_prompt: str,
         workspace_enabled: bool,
         model_settings: dict[str, Any] | None = None,

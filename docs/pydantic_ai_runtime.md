@@ -37,3 +37,27 @@ PydanticAI is intentionally not configured with shell, filesystem, web, MCP,
 dynamic tool discovery, or arbitrary code execution capabilities. The dependency
 is pinned to `pydantic-ai-slim[openai,retries]==1.107.1`; upgrades must first pass
 the adapter and API contract tests in an isolated branch.
+
+## Installation compatibility
+
+LM_Agent uses the PydanticAI 1.107.1 API, including the canonical
+`OpenAIChatModel` class. Do not downgrade PydanticAI to 0.x or validate the
+installation with the deprecated `OpenAIModel` name.
+
+PydanticAI's full and slim distributions share the `pydantic_ai` import
+namespace. After changing between major versions, uninstall both distributions
+before reinstalling the project so files from two versions cannot remain mixed:
+
+```bat
+cd /d D:\Python\LM_Agent
+.venv\Scripts\python.exe -m pip uninstall -y pydantic-ai pydantic-ai-slim pydantic-graph
+.venv\Scripts\python.exe -m pip install --no-cache-dir -e .
+.venv\Scripts\python.exe -m pip check
+.venv\Scripts\python.exe -m app.scripts.validate_pydantic_ai
+.venv\Scripts\python.exe -c "from pydantic_ai.models.openai import OpenAIChatModel; print('PydanticAI import OK')"
+```
+
+The validation command checks the exact PydanticAI and pydantic-graph versions,
+the OpenAI extra, OpenTelemetry API, and the imports used by the runtime. The
+private `opentelemetry._events` module is not part of LM_Agent's compatibility
+contract and must not be used as an installation check.

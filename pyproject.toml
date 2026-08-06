@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
-    "pydantic>=2.8.0",
+    "pydantic>=2.12.0",
     "pydantic-settings>=2.4.0",
     "sqlalchemy>=2.0.30",
     "psycopg[binary]>=3.2.0",
@@ -37,6 +37,7 @@ lm-agent-office-check = "app.scripts.validate_office_com:main"
 lm-agent-llmwiki-reset = "app.cli.llmwiki:reset_main"
 lm-agent-llmwiki-discover = "app.cli.llmwiki:discover_main"
 lm-agent-eval-analysis-intents = "app.scripts.evaluate_analysis_intents:main"
+lm-agent-pydantic-ai-check = "app.scripts.validate_pydantic_ai:main"
 
 [project.optional-dependencies]
 dev = [
